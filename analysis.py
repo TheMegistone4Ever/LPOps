@@ -165,7 +165,7 @@ def collect_data(m_values: List[int], n_values: List[int], num_runs: int = 5) ->
 
 
 def calculate_loss(data: List[Tuple], model_func: callable, params: np.ndarray) -> float:
-    """Calculate sum of squared errors for a model."""
+    """Calculate a sum of squared errors for a model."""
     X = [(d[0], d[1]) for d in data]
     y_true = [d[3] for d in data]
     y_pred = [model_func((m, n), *params) for m, n in X]
@@ -328,7 +328,7 @@ def main():
     logging.info("Starting data collection...")
     data = collect_data(m_values, n_values, num_runs)
 
-    # Fit models and find best
+    # Fit models and find the best
     best_model = None
     best_loss = float("inf")
     best_model_name = ""
@@ -342,7 +342,7 @@ def main():
             best_model = (model_func, params)
             best_model_name = model_name
 
-    # Save best model
+    # Save the best model
     cache_manager.save("best_model", {
         "name": best_model_name,
         "parameters": best_model[1].tolist() if best_model[1] is not None else None,
