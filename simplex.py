@@ -64,15 +64,3 @@ def simplex_method(c, A, b):
                 factor = A_slack[i, entering]
                 A_slack[i, :] -= factor * A_slack[leaving, :]
         operations += m * (n + m)
-
-
-# Example usage (you'll replace this with the problem generator)
-c = np.array([3, 2])
-A = np.array([[1, 1], [2, 0.5]])
-b = np.array([4, 6])
-
-x_opt, obj_val, iters, ops = simplex_method(c, A, b)
-print(f"Optimal solution: {x_opt}")
-print(f"Optimal value: {obj_val}")
-print(f"Iterations: {iters}")
-print(f"Operations: {ops}")
