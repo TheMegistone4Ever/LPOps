@@ -19,13 +19,3 @@ def generate_lp_problem(m, n):
     c = np.random.rand(n)
 
     return c, A, b, x
-
-
-# Example usage:
-# m, n = 5, 3
-# c, A, b, x_true = generate_lp_problem(m, n)
-# print("Generated Problem:")
-# print("c:", c)
-# print("A:", A)
-# print("b:", b)
-# print("True x:", x_true)
