@@ -1,10 +1,9 @@
-import hashlib
 import json
 import logging
 import os
 import re
 import time
-from typing import List, Tuple, Any, Optional, Dict
+from typing import List, Tuple, Any, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -36,40 +35,42 @@ class CacheManager:
             os.makedirs(self.cache_dir)
 
     def create_key(self, m: int, n: int, model_type: str) -> str:
-        """Create a unique hash key for caching."""
-        key_string = f"{m}_{n}_{model_type}"
-        return hashlib.md5(key_string.encode()).hexdigest()
+        """Create a unique key for identifying computations."""
+        return f"{m}_{n}_{model_type}"
 
-    def save(self, cache_key: str, data: Any) -> None:
-        """Save data to cache."""
+    def save(self, key: str, data: Any) -> None:
+        """Save data to file."""
         try:
-            cache = self._load_cache()
-            cache[cache_key] = data
+            # Load existing data
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, "r") as f:
+                    cache = json.load(f)
+            else:
+                cache = {}
 
+            # Update with new data
+            cache[key] = data
+
+            # Save back to file
             with open(self.cache_file, "w") as f:
                 json.dump(cache, f)
-            logging.info(f"Saved to cache: {cache_key}")
+            logging.info(f"Saved to cache: {key}")
         except Exception as e:
             logging.error(f"Cache save failed: {e}")
 
-    def load(self, cache_key: str) -> Optional[Any]:
-        """Load data from cache."""
+    def load(self, key: str) -> Optional[Any]:
+        """Load data from file."""
         try:
-            cache = self._load_cache()
-            if cache_key in cache:
-                logging.info(f"Cache hit: {cache_key}")
-                return cache[cache_key]
+            if os.path.exists(self.cache_file):
+                with open(self.cache_file, "r") as f:
+                    cache = json.load(f)
+                    if key in cache:
+                        logging.info(f"Cache hit: {key}")
+                        return cache[key]
             return None
         except Exception as e:
             logging.error(f"Cache load failed: {e}")
             return None
-
-    def _load_cache(self) -> Dict:
-        """Load the entire cache file."""
-        if os.path.exists(self.cache_file):
-            with open(self.cache_file, "r") as f:
-                return json.load(f)
-        return {}
 
 
 # Initialize cache manager
@@ -119,8 +120,8 @@ def collect_data(m_values: List[int], n_values: List[int], num_runs: int = 5) ->
     data = []
     for m in m_values:
         for n in n_values:
-            cache_key = cache_manager.create_key(m, n, "base_computation")
-            cached_result = cache_manager.load(cache_key)
+            key = f"{m}_{n}_base_computation"  # Simplified key
+            cached_result = cache_manager.load(key)
 
             if cached_result is not None:
                 data.append(tuple(cached_result))
@@ -155,7 +156,7 @@ def collect_data(m_values: List[int], n_values: List[int], num_runs: int = 5) ->
             )
 
             # Cache result
-            cache_manager.save(cache_key, result)
+            cache_manager.save(key, result)
             data.append(result)
 
             logging.info(f"m={m}, n={n}: avg_iterations={result[2]:.2f}, "
@@ -270,13 +271,10 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
 
 def fit_model(data: List[Tuple], model_func: callable, model_name: str) -> Tuple[Optional[np.ndarray], float]:
     """Fit model to data with caching."""
-    cache_key = cache_manager.create_key(
-        "_".join(str(d[0]) for d in data[:3]),
-        "_".join(str(d[1]) for d in data[:3]),
-        model_name
-    )
 
-    cached_result = cache_manager.load(cache_key)
+    key = f"model_fit_{model_name.replace(" ", "_").lower()}_{'_'.join(str(d[0]) + '_' + str(d[1]) for d in data[:3])}"
+
+    cached_result = cache_manager.load(key)
     if cached_result is not None:
         return np.array(cached_result[0]), cached_result[1]
 
@@ -296,7 +294,7 @@ def fit_model(data: List[Tuple], model_func: callable, model_name: str) -> Tuple
         if result.success:
             params = result.x
             loss = result.fun
-            cache_manager.save(cache_key, (params.tolist(), loss))
+            cache_manager.save(key, (params.tolist(), loss))
             create_plots(data, model_func, model_name, params)
             return params, loss
         else:
@@ -310,8 +308,8 @@ def fit_model(data: List[Tuple], model_func: callable, model_name: str) -> Tuple
 
 def main():
     # Configuration
-    m_values = list(range(200, 2001, 50))
-    n_values = list(range(200, 2001, 50))
+    m_values = list(range(200, 2001, 50))[:3]
+    n_values = list(range(200, 2001, 50))[:3]
     num_runs = 5
 
     # Models to test
