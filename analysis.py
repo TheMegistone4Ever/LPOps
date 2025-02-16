@@ -310,9 +310,9 @@ def fit_model(data: List[Tuple], model_func: callable, model_name: str) -> Tuple
 
 def main():
     # Configuration
-    m_values = list(range(100, 5001, 175))
-    n_values = list(range(100, 5001, 175))
-    num_runs = 10
+    m_values = list(range(200, 2001, 50))
+    n_values = list(range(200, 2001, 50))
+    num_runs = 5
 
     # Models to test
     models = [
