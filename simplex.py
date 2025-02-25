@@ -4,7 +4,7 @@ import numpy as np
 def simplex_method(c, A, b):
     """
     Simplified simplex method implementation.
-    Assumes problem is in canonical form (maximization).
+    Assumes a problem is in canonical form (maximization).
     """
     m, n = A.shape
 
