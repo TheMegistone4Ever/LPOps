@@ -1,4 +1,4 @@
-import numpy as np
+from numpy.random import rand
 
 
 def generate_lp_problem(m, n):
@@ -7,15 +7,15 @@ def generate_lp_problem(m, n):
     """
 
     # Generate a random solution vector x with positive values
-    x = np.random.rand(n) + 0.1  # Ensure positivity
+    x = rand(n) + 0.1  # Ensure positivity
 
     # Generate a random constraint matrix A
-    A = np.random.rand(m, n)
+    A = rand(m, n)
 
     # Calculate b to ensure feasibility (Ax <= b)
-    b = A @ x + np.random.rand(m) * 2  # Add some slack
+    b = A @ x + rand(m) * 2  # Add some slack
 
     # Generate a random cost vector c
-    c = np.random.rand(n)
+    c = rand(n)
 
     return c, A, b, x
