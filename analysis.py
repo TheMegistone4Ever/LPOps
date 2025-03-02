@@ -1,18 +1,17 @@
-import json
 import logging
 import os
 import re
 import time
-from typing import List, Tuple, Any, Optional
+from typing import List, Tuple, Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import minimize
 
+from cache_manager import CacheManager
 from generator import generate_lp_problem
 from simplex import simplex_method
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -22,58 +21,6 @@ logging.basicConfig(
     ]
 )
 
-
-class CacheManager:
-    def __init__(self, cache_dir: str = "cache"):
-        self.cache_dir = cache_dir
-        self.cache_file = os.path.join(cache_dir, "computation_cache.json")
-        self._ensure_cache_dir()
-
-    def _ensure_cache_dir(self):
-        """Ensure cache directory exists."""
-        if not os.path.exists(self.cache_dir):
-            os.makedirs(self.cache_dir)
-
-    def create_key(self, m: int, n: int, model_type: str) -> str:
-        """Create a unique key for identifying computations."""
-        return f"{m}_{n}_{model_type}"
-
-    def save(self, key: str, data: Any) -> None:
-        """Save data to file."""
-        try:
-            # Load existing data
-            if os.path.exists(self.cache_file):
-                with open(self.cache_file, "r") as f:
-                    cache = json.load(f)
-            else:
-                cache = {}
-
-            # Update with new data
-            cache[key] = data
-
-            # Save back to file
-            with open(self.cache_file, "w") as f:
-                json.dump(cache, f)
-            logging.info(f"Saved to cache: {key}")
-        except Exception as e:
-            logging.error(f"Cache save failed: {e}")
-
-    def load(self, key: str) -> Optional[Any]:
-        """Load data from file."""
-        try:
-            if os.path.exists(self.cache_file):
-                with open(self.cache_file, "r") as f:
-                    cache = json.load(f)
-                    if key in cache:
-                        logging.info(f"Cache hit: {key}")
-                        return cache[key]
-            return None
-        except Exception as e:
-            logging.error(f"Cache load failed: {e}")
-            return None
-
-
-# Initialize cache manager
 cache_manager = CacheManager()
 
 
@@ -113,6 +60,14 @@ def general_model_log(X: Tuple[np.ndarray, np.ndarray], a: float, b: float, c: f
     m, n = X
     log_n = np.where(n > 1, np.log(n), 0)
     return a * (m ** b) * (n ** c) * log_n ** d
+
+
+def general_model_mixed(X: Tuple[np.ndarray, np.ndarray], a: float, b: float, c: float, d: float, e: float,
+                        f: float, g: float) -> np.ndarray:
+    """General model with mixed terms: O(m^a * n^b * log(n)^c + d * m^e * n^f)."""
+    m, n = X
+    log_n = np.where(n > 1, np.log(n), 0)
+    return a * (m ** b) * (n ** c) * (log_n ** d) + e * (m ** f) * (n ** g)
 
 
 def collect_data(m_values: List[int], n_values: List[int], num_runs: int = 5) -> List[Tuple]:
