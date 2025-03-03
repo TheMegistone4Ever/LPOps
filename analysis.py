@@ -351,23 +351,23 @@ def format_parameter_equation(model_name, params, model_func):
         terms = []
 
         # Borgwardt term
-        if params[0] > 0.01:  # Only include terms with significant weights
+        if params[0] > 10e-8:  # Only include terms with significant weights
             terms.append(f"{params[0]:.4f} × ({params[1]:.6f} × m³ × n)")
 
         # Smoothed Analysis term
-        if params[2] > 0.01:
+        if params[2] > 10e-8:
             terms.append(f"{params[2]:.4f} × ({params[3]:.6f} × m × n⁵ × log(n)^{params[4]:.6f})")
 
         # Adler-Megiddo term
-        if params[5] > 0.01:
+        if params[5] > 10e-8:
             terms.append(f"{params[5]:.4f} × ({params[6]:.6f} × n⁴)")
 
         # Refined Borgwardt term
-        if params[7] > 0.01:
+        if params[7] > 10e-8:
             terms.append(f"{params[7]:.4f} × ({params[8]:.6f} × m³ × n²)")
 
         # General Model Mixed term
-        if params[9] > 0.01:
+        if params[9] > 10e-8:
             terms.append(
                 f"{params[9]:.4f} × ({params[10]:.6f} × m^{params[11]:.6f} × n^{params[12]:.6f} × log(n)^{params[13]:.6f} + {params[14]:.6f} × m^{params[15]:.6f} × n^{params[16]:.6f})")
 
