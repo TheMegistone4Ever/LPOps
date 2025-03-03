@@ -271,21 +271,48 @@ def fit_model(data: List[Tuple], model_func: callable, model_name: str,
         else:
             initial_guess = initial_params.tolist()
 
+        # Define default bounds
         bounds = [(1e-6, None)] * len(initial_guess)
 
-        # For weighted ensemble model, constrain weights to sum to 1
+        # For weighted ensemble model, we need special constraints
+        weight_indices = []
+        constraints = []
+
         if model_func.__name__ == "weighted_ensemble_model":
-            weight_indices = [0, 2, 5, 7, 9]  # Indices of weights in the params array
-            initial_weights = [initial_guess[i] for i in weight_indices]
-            total_weight = sum(initial_weights)
+            # Identify weight indices in the parameter array
+            weight_indices = [0, 2, 5, 7, 9]
+
+            # Normalize weights to sum to 1
+            weights = [initial_guess[i] for i in weight_indices]
+            total = sum(weights)
+            if total > 0:
+                for i in weight_indices:
+                    initial_guess[i] /= total
+
+            # Set bounds for weights to be between 0 and 1
             for i in weight_indices:
-                initial_guess[i] /= total_weight  # Normalize weights
+                bounds[i] = (0.0, 1.0)
+
+            # Define a constraint that weights must sum to 1
+            def weight_constraint(params):
+                return sum(params[i] for i in weight_indices) - 1.0
+
+            constraints = [{'type': 'eq', 'fun': weight_constraint}]
 
         def objective(params):
             predictions = [model_func((m, n), *params) for m, n in zip(X[0], X[1])]
             return np.sum((np.array(predictions) - np.array(y)) ** 2)
 
-        result = minimize(objective, initial_guess, bounds=bounds, method="L-BFGS-B")
+        # Use SLSQP for constrained optimization (when we have constraints)
+        method = "SLSQP" if constraints else "L-BFGS-B"
+
+        result = minimize(
+            objective,
+            initial_guess,
+            bounds=bounds,
+            method=method,
+            constraints=constraints if constraints else None
+        )
 
         if result.success:
             params = result.x
@@ -298,7 +325,7 @@ def fit_model(data: List[Tuple], model_func: callable, model_name: str,
             return None, float("inf")
 
     except Exception as e:
-        logging.error(f"Fitting failed for {model_name} on sample {sample_id}: {e}")
+        logging.error(f"Fitting failed for {model_name} on sample {sample_id}: {str(e)}")
         return None, float("inf")
 
 
@@ -405,17 +432,18 @@ def main(num_samples: int = 2):
             params, loss = fit_model(data, model_func, model_name, sample_id, initial_params)
 
             # Store the fitted parameters and loss
-            all_models_params[model_name].append(params)
-            all_models_losses[model_name].append(loss)
+            if params is not None:
+                all_models_params[model_name].append(params)
+                all_models_losses[model_name].append(loss)
 
-            # Save for ensemble model
-            sample_fitted_models[model_name] = (params, loss)
+                # Save for ensemble model
+                sample_fitted_models[model_name] = (params, loss)
 
-            if loss < sample_best_loss:
-                sample_best_loss = loss
-                sample_best_model = (model_func, params)
-                sample_best_model_name = model_name
-                sample_best_params = params
+                if loss < sample_best_loss:
+                    sample_best_loss = loss
+                    sample_best_model = (model_func, params)
+                    sample_best_model_name = model_name
+                    sample_best_params = params
 
         # Save the best model for this sample
         best_single_models[sample_id] = {
@@ -423,6 +451,11 @@ def main(num_samples: int = 2):
             "parameters": sample_best_params.tolist() if sample_best_params is not None else None,
             "loss": sample_best_loss
         }
+
+        # Check if we have all required models fitted successfully
+        if len(sample_fitted_models) < len(models):
+            logging.warning(f"Some models failed to fit for sample {sample_id}. Skipping ensemble model.")
+            continue
 
         # Build and fit the ensemble model
         logging.info(f"Building ensemble model on sample {sample_id}...")
@@ -432,31 +465,29 @@ def main(num_samples: int = 2):
 
         # Add Borgwardt's Model parameters
         borgwardt_params = sample_fitted_models["Borgwardt's Model"][0]
-        ensemble_initial_params.extend([1.0 / 5, borgwardt_params[0]])
+        ensemble_initial_params.extend([0.2, borgwardt_params[0]])
 
         # Add Smoothed Analysis Model parameters
         smoothed_params = sample_fitted_models["Smoothed Analysis Model"][0]
-        ensemble_initial_params.extend([1.0 / 5, smoothed_params[0], smoothed_params[1]])
+        ensemble_initial_params.extend([0.2, smoothed_params[0], smoothed_params[1]])
 
         # Add Adler-Megiddo Model parameters
         adler_params = sample_fitted_models["Adler-Megiddo Model"][0]
-        ensemble_initial_params.extend([1.0 / 5, adler_params[0]])
+        ensemble_initial_params.extend([0.2, adler_params[0]])
 
         # Add Refined Borgwardt Model parameters
         refined_params = sample_fitted_models["Refined Borgwardt Model"][0]
-        ensemble_initial_params.extend([1.0 / 5, refined_params[0]])
+        ensemble_initial_params.extend([0.2, refined_params[0]])
 
         # Add General Model Mixed parameters
         mixed_params = sample_fitted_models["General Model Mixed"][0]
-        ensemble_initial_params.extend([1.0 / 5, mixed_params[0], mixed_params[1], mixed_params[2],
+        ensemble_initial_params.extend([0.2, mixed_params[0], mixed_params[1], mixed_params[2],
                                         mixed_params[3], mixed_params[4], mixed_params[5], mixed_params[6]])
 
         # Check if we have ensemble parameters from a previous sample
         ensemble_params_from_prev = None
         if sample_idx > 1 and all_models_params["Weighted Ensemble Model"]:
             ensemble_params_from_prev = np.array(all_models_params["Weighted Ensemble Model"][0])
-
-
 
         # Fit the ensemble model
         ensemble_params, ensemble_loss = fit_model(
@@ -468,9 +499,12 @@ def main(num_samples: int = 2):
                 ensemble_initial_params)
         )
 
-        # Store ensemble model parameters and loss
-        all_models_params["Weighted Ensemble Model"].append(ensemble_params)
-        all_models_losses["Weighted Ensemble Model"].append(ensemble_loss)
+        # Store ensemble model parameters and loss if fitting was successful
+        if ensemble_params is not None:
+            all_models_params["Weighted Ensemble Model"].append(ensemble_params)
+            all_models_losses["Weighted Ensemble Model"].append(ensemble_loss)
+        else:
+            logging.warning(f"Ensemble model fitting failed for sample {sample_id}")
 
     # Calculate average parameters for each model across samples
     avg_params = {}
@@ -483,14 +517,15 @@ def main(num_samples: int = 2):
     best_single_model_avg_loss = float("inf")
 
     for model_name, losses in all_models_losses.items():
-        if model_name != "Weighted Ensemble Model":  # Exclude ensemble from single model comparison
+        if model_name != "Weighted Ensemble Model" and losses:  # Exclude ensemble and check if we have losses
             avg_loss = np.mean(losses)
             if avg_loss < best_single_model_avg_loss:
                 best_single_model_avg_loss = avg_loss
                 best_single_model_name = model_name
 
     # Compare the best single model with the ensemble model
-    ensemble_avg_loss = np.mean(all_models_losses["Weighted Ensemble Model"])
+    ensemble_avg_loss = np.mean(all_models_losses["Weighted Ensemble Model"]) if all_models_losses[
+        "Weighted Ensemble Model"] else float("inf")
 
     # Output results
     print("\n=== RESULTS ===\n")
@@ -540,34 +575,39 @@ def main(num_samples: int = 2):
         print(f"The best individual model ({best_single_model_name}) outperforms the ensemble.")
 
     # Save all results to cache
-    cache_manager.save("analysis_results", {
-        "individual_models": {
-            model_name: {
-                "parameters": [p.tolist() if p is not None else None for p in params],
-                "losses": losses,
-                "avg_parameters": avg_params.get(model_name, None).tolist() if model_name in avg_params else None,
-                "avg_loss": np.mean(losses)
-            } for model_name, params, losses in zip(
-                all_models_params.keys(),
-                all_models_params.values(),
-                all_models_losses.values()
-            )
-        },
+    result_data = {
+        "individual_models": {},
         "best_single_model": {
             "name": best_single_model_name,
             "avg_loss": best_single_model_avg_loss,
-            "avg_parameters": avg_params.get(best_single_model_name,
-                                             None).tolist() if best_single_model_name in avg_params else None
         },
         "ensemble_model": {
             "parameters": [p.tolist() if p is not None else None for p in all_models_params["Weighted Ensemble Model"]],
             "losses": all_models_losses["Weighted Ensemble Model"],
-            "avg_parameters": avg_params.get("Weighted Ensemble Model",
-                                             None).tolist() if "Weighted Ensemble Model" in avg_params else None,
-            "avg_loss": ensemble_avg_loss
+            "avg_loss": ensemble_avg_loss if all_models_losses["Weighted Ensemble Model"] else None
         },
         "overall_best_model": "Weighted Ensemble Model" if ensemble_avg_loss < best_single_model_avg_loss else best_single_model_name
-    })
+    }
+
+    # Add individual model data
+    for model_name in all_models_params.keys():
+        if model_name != "Weighted Ensemble Model":
+            result_data["individual_models"][model_name] = {
+                "parameters": [p.tolist() if p is not None else None for p in all_models_params[model_name]],
+                "losses": all_models_losses[model_name],
+                "avg_parameters": avg_params.get(model_name, None).tolist() if model_name in avg_params else None,
+                "avg_loss": np.mean(all_models_losses[model_name]) if all_models_losses[model_name] else None
+            }
+
+    # Add best single model parameters if available
+    if best_single_model_name in avg_params:
+        result_data["best_single_model"]["avg_parameters"] = avg_params[best_single_model_name].tolist()
+
+    # Add ensemble model average parameters if available
+    if "Weighted Ensemble Model" in avg_params:
+        result_data["ensemble_model"]["avg_parameters"] = avg_params["Weighted Ensemble Model"].tolist()
+
+    cache_manager.save("analysis_results", result_data)
 
 
 if __name__ == "__main__":
