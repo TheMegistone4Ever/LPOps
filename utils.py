@@ -4,6 +4,7 @@ from typing import List, Tuple
 
 import numpy as np
 from matplotlib import pyplot as plt
+from pandas import DataFrame
 
 
 def calculate_loss(data: List[Tuple], model_func: callable, params: np.ndarray) -> float:
@@ -16,12 +17,16 @@ def calculate_loss(data: List[Tuple], model_func: callable, params: np.ndarray) 
 
 def create_plots(data: List[Tuple], model_func: callable, model_name: str,
                  params: np.ndarray, plot_dir: str = "plots", sample_id: str = ""):
-    """Create visualization plots in both linear and logarithmic scales."""
+    """Create visualization plots with box plots and connected average lines."""
+
     if not os.path.exists(plot_dir):
         os.makedirs(plot_dir)
 
     safe_name = re.sub(r"[\\/*?:'<>|]", "", model_name)
     sample_suffix = f"_{sample_id}" if sample_id else ""
+
+    # Convert data to DataFrame
+    df = DataFrame(data, columns=['m', 'n', 'problem_data', 'operations'])
 
     # Create separate figures for linear and log scales
     for scale in ["linear", "log"]:
@@ -29,32 +34,63 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
 
         # Plot against m
         plt.subplot(1, 2, 1)
-        for n in sorted(set(d[1] for d in data)):
-            m_vals = [d[0] for d in data if d[1] == n]
-            ops = [d[3] for d in data if d[1] == n]
-            plt.plot(m_vals, ops, "o-", label=f"n={n}")
+        for n in sorted(df['n'].unique()):
+            subset = df[df['n'] == n]
+            # Create a list of operation counts for each unique 'm'
+            data_to_plot = [subset[subset['m'] == m]['operations'].values for m in sorted(subset['m'].unique())]
+            m_vals = sorted(subset['m'].unique())
+
+            # Create the box plot
+            bp = plt.boxplot(data_to_plot, positions=m_vals, widths=0.6, patch_artist=True, showfliers=False)
+
+            # Customize box plot appearance
+            for box in bp['boxes']:
+                box.set(facecolor='lightblue')
+            for median in bp['medians']:
+                median.set(color='red', linewidth=2)
+
+            # Plot the average line
+            avg_ops = subset.groupby('m')['operations'].mean().values
+            plt.plot(m_vals, avg_ops, 'k-', linewidth=1, alpha=0.7) # solid line
 
             if params is not None:
                 m_range = np.linspace(min(m_vals), max(m_vals), 100)
-                plt.plot(m_range,
-                         model_func((m_range, np.full_like(m_range, n)), *params),
+                plt.plot(m_range, model_func((m_range, np.full_like(m_range, n)), *params),
                          "--", label=f"Fit n={n}")
+
 
         plt.xlabel("m")
         plt.ylabel("Operations")
-        plt.title(
-            f"{model_name} - Operations vs. m ({scale.capitalize()} Scale){" - " + sample_id if sample_id else ""}")
+        plt.title(f"{model_name} - Operations vs. m ({scale.capitalize()} Scale){" - " + sample_id if sample_id else ""}")
         if scale == "log":
             plt.yscale("log")
         plt.legend()
         plt.grid(True, which="both", ls="-", alpha=0.2)
 
+
+
         # Plot against n
         plt.subplot(1, 2, 2)
-        for m in sorted(set(d[0] for d in data)):
-            n_vals = [d[1] for d in data if d[0] == m]
-            ops = [d[3] for d in data if d[0] == m]
-            plt.plot(n_vals, ops, "o-", label=f"m={m}")
+        for m in sorted(df['m'].unique()):
+            subset = df[df['m'] == m]
+
+            # Create a list of operation counts for each unique 'n'
+            data_to_plot = [subset[subset['n'] == n]['operations'].values for n in sorted(subset['n'].unique())]
+            n_vals = sorted(subset['n'].unique())
+
+            # Create the box plot
+            bp = plt.boxplot(data_to_plot, positions=n_vals, widths=0.6, patch_artist=True, showfliers=False)
+
+
+            # Customize box plot appearance
+            for box in bp['boxes']:
+                box.set(facecolor='lightblue')
+            for median in bp['medians']:
+                median.set(color='red', linewidth=2)
+
+            # Plot the average line
+            avg_ops = subset.groupby('n')['operations'].mean().values
+            plt.plot(n_vals, avg_ops, 'k-', linewidth=1, alpha=0.7)
 
             if params is not None:
                 n_range = np.linspace(min(n_vals), max(n_vals), 100)
@@ -64,22 +100,25 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
 
         plt.xlabel("n")
         plt.ylabel("Operations")
-        plt.title(
-            f"{model_name} - Operations vs. n ({scale.capitalize()} Scale){" - " + sample_id if sample_id else ""}")
+        plt.title(f"{model_name} - Operations vs. n ({scale.capitalize()} Scale){" - " + sample_id if sample_id else ""}")
+
         if scale == "log":
             plt.yscale("log")
         plt.legend()
         plt.grid(True, which="both", ls="-", alpha=0.2)
 
+
         plt.tight_layout()
         plt.savefig(f"{plot_dir}/{safe_name}{sample_suffix}_{scale}_2d.png")
         plt.close()
 
-    # 3D Plots (both scales)
+
+    # 3D Plots (both scales) -  Keep original 3D plots, just average data
     if params is not None:
+        df_grouped = df.groupby(['m', 'n'])['operations'].mean().reset_index() # For 3D plot
         for scale in ["linear", "log"]:
-            m_vals = sorted(set(d[0] for d in data))
-            n_vals = sorted(set(d[1] for d in data))
+            m_vals = sorted(df_grouped['m'].unique())
+            n_vals = sorted(df_grouped['n'].unique())
             m_grid, n_grid = np.meshgrid(m_vals, n_vals)
             ops_grid = model_func((m_grid, n_grid), *params)
 
@@ -91,15 +130,15 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
 
             surf = ax.plot_surface(m_grid, n_grid, ops_grid, cmap="viridis", alpha=0.7)
 
-            # Plot actual data points
-            m_data = [d[0] for d in data]
-            n_data = [d[1] for d in data]
-            ops_data = [d[3] for d in data]
+            # Plot actual *averaged* data points
+            m_data = df_grouped['m'].values
+            n_data = df_grouped['n'].values
+            ops_data = df_grouped['operations'].values  # Use the averaged values
 
             if scale == "log":
                 ops_data = np.log10(ops_data)
 
-            ax.scatter(m_data, n_data, ops_data, c="red", marker="o", label="Actual Data")
+            ax.scatter(m_data, n_data, ops_data, c="red", marker="o", label="Actual Data (Averaged)")
 
             ax.set_xlabel("m")
             ax.set_ylabel("n")

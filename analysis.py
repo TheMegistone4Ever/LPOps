@@ -81,6 +81,7 @@ def generate_sample(sample_name: str, m_range: List[int], n_range: List[int], fa
     for m in m_range:
         for n in n_range:
             # Generate multiple problems for each (m,n) pair
+            # TODO: Replace hardcoded number of problems with a parameter
             for _ in range(3):  # Generate 3 problems for each configuration
                 logging.info(f"Generating LP problem with m={m}, n={n}")
                 c, A, b, _ = generate_lp_problem(m, n, factor=factor)
