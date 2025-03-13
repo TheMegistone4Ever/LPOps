@@ -12,15 +12,14 @@ def calculate_loss(data: List[Tuple], model_func: callable, params: np.ndarray) 
     X = [(d[0], d[1]) for d in data]
     y_true = [d[3] for d in data]
     y_pred = [model_func((m, n), *params) for m, n in X]
-    return np.sum((np.array(y_true) - np.array(y_pred)) ** 2)
+    return np.sum((np.array(y_true) - np.array(y_pred)) ** 2) / len(data)
 
 
 def create_plots(data: List[Tuple], model_func: callable, model_name: str,
                  params: np.ndarray, plot_dir: str = "plots", sample_id: str = ""):
     """Create visualization plots with box plots and connected average lines."""
 
-    if not os.path.exists(plot_dir):
-        os.makedirs(plot_dir)
+    os.makedirs(plot_dir, exist_ok=True)
 
     safe_name = re.sub(r"[\\/*?:'<>|]", "", model_name)
     sample_suffix = f"_{sample_id}" if sample_id else ""
@@ -51,23 +50,21 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
 
             # Plot the average line
             avg_ops = subset.groupby('m')['operations'].mean().values
-            plt.plot(m_vals, avg_ops, 'k-', linewidth=1, alpha=0.7) # solid line
+            plt.plot(m_vals, avg_ops, 'k-', linewidth=1, alpha=0.7)  # solid line
 
             if params is not None:
                 m_range = np.linspace(min(m_vals), max(m_vals), 100)
                 plt.plot(m_range, model_func((m_range, np.full_like(m_range, n)), *params),
                          "--", label=f"Fit n={n}")
 
-
         plt.xlabel("m")
         plt.ylabel("Operations")
-        plt.title(f"{model_name} - Operations vs. m ({scale.capitalize()} Scale){" - " + sample_id if sample_id else ""}")
+        plt.title(
+            f"{model_name} - Operations vs. m ({scale.capitalize()} Scale){" - " + sample_id if sample_id else ""}")
         if scale == "log":
             plt.yscale("log")
         plt.legend()
         plt.grid(True, which="both", ls="-", alpha=0.2)
-
-
 
         # Plot against n
         plt.subplot(1, 2, 2)
@@ -80,7 +77,6 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
 
             # Create the box plot
             bp = plt.boxplot(data_to_plot, positions=n_vals, widths=0.6, patch_artist=True, showfliers=False)
-
 
             # Customize box plot appearance
             for box in bp['boxes']:
@@ -100,22 +96,21 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
 
         plt.xlabel("n")
         plt.ylabel("Operations")
-        plt.title(f"{model_name} - Operations vs. n ({scale.capitalize()} Scale){" - " + sample_id if sample_id else ""}")
+        plt.title(
+            f"{model_name} - Operations vs. n ({scale.capitalize()} Scale){" - " + sample_id if sample_id else ""}")
 
         if scale == "log":
             plt.yscale("log")
         plt.legend()
         plt.grid(True, which="both", ls="-", alpha=0.2)
 
-
         plt.tight_layout()
         plt.savefig(f"{plot_dir}/{safe_name}{sample_suffix}_{scale}_2d.png")
         plt.close()
 
-
     # 3D Plots (both scales) -  Keep original 3D plots, just average data
     if params is not None:
-        df_grouped = df.groupby(['m', 'n'])['operations'].mean().reset_index() # For 3D plot
+        df_grouped = df.groupby(['m', 'n'])['operations'].mean().reset_index()  # For 3D plot
         for scale in ["linear", "log"]:
             m_vals = sorted(df_grouped['m'].unique())
             n_vals = sorted(df_grouped['n'].unique())
