@@ -5,12 +5,6 @@ from tempfile import NamedTemporaryFile
 from typing import Any, Optional
 
 
-def create_key(m: int, n: int, model_type: str) -> str:
-    """Create a unique key for identifying computations."""
-
-    return f"{m}_{n}_{model_type}"
-
-
 class CacheManager:
     def __init__(self, cache_dir: str = "cache"):
         self.cache_dir = cache_dir
