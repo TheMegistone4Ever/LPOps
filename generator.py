@@ -21,7 +21,7 @@ def generate_lp_problem(m, n, factor=1, block_size=512):
     x = rand(n) * factor + 0.1  # Ensure positivity
 
     # Generate a random constraint matrix A in blocks
-    A = np.zeros((m, n), dtype=np.float16)
+    A = np.zeros((m, n), dtype=np.float32)
     for i in range(0, m, block_size):
         i_end = min(i + block_size, m)
         for j in range(0, n, block_size):
