@@ -1,4 +1,3 @@
-# analysis.py
 import logging
 import time
 from typing import List, Tuple
@@ -58,7 +57,8 @@ def format_parameter_equation(model_name: str, params: np.ndarray) -> str:
 
 def generate_sample(sample_name: str, m_range: List[int], n_range: List[int], factor: float = 1.0) -> List[Tuple]:
     """
-    Generate a sample of LP problems and record their simplex performance.
+    Generate a sample of LP problems and record their simplex performance,
+    with caching for the simplex method results.
 
     Args:
         sample_name: Name of the sample for caching
@@ -81,16 +81,24 @@ def generate_sample(sample_name: str, m_range: List[int], n_range: List[int], fa
 
     for m in m_range:
         for n in n_range:
-            # Generate multiple problems for each (m,n) pair
-            num_problems = 3  # Generate 3 problems for each configuration
+            num_problems = 3
             logging.info(f"Generating {num_problems} LP problems with m={m}, n={n}")
-            for _ in range(num_problems):
+            for problem_index in range(num_problems):
                 c, A, b, _ = generate_lp_problem(m, n, factor=factor)
 
-                # Solve the problem and record operation count
-                solution, objective, iterations, flops = simplex_method(c, A, b)
-                sample_data.append((m, n, (c, A, b, solution, objective), flops))
+                problem_key = f"simplex_{m}_{n}_{factor}_{problem_index}"
+                cached_solution = cache_manager.load(problem_key)
 
+                if cached_solution:
+                    logging.info(f"Loaded simplex solution for m={m}, n={n}, problem {problem_index} from cache")
+                    solution, objective, iterations, flops = cached_solution
+                else:
+                    logging.info(f"Solving simplex for m={m}, n={n}, problem {problem_index}")
+                    solution, objective, iterations, flops = simplex_method(c, A, b)
+                    # Cache the solution for this specific problem
+                    cache_manager.save(problem_key, (solution, objective, iterations, flops))
+
+                sample_data.append((m, n, (c, A, b, solution, objective), flops))
                 logging.info(f"Problem solved in {iterations} iterations, {flops} operations")
 
     cache_manager.save(sample_key, sample_data)
@@ -176,9 +184,8 @@ def evaluate_model(model_func, params, sample_data, model_name, sample_name):
         Mean squared error.
     """
 
-    params_str = '_'.join(map(str, params))
-    sample_str = f"{sample_data[0]}_{sample_data[len(sample_data) // 2]}_{sample_data[-1]}"
-    cache_key = f"evaluate_{model_name}_{sample_name}_{params_str}_{sample_str}"
+    params_str = '_'.join(f"{p:.4f}" for p in params)
+    cache_key = f"evaluate_{model_name}_{sample_name}_{params_str}"
     cached_result = cache_manager.load(cache_key)
 
     if cached_result:
