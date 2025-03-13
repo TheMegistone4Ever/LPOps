@@ -136,7 +136,7 @@ def fit_model(model_func, initial_params, sample_data, model_name, sample_name):
     if not cache_manager.load(plot_cache_key):
         logging.info(f"Creating and caching plots for {model_name} on {sample_name}")
         create_plots(sample_data, model_func, model_name, optimal_params, sample_id=sample_name)
-        cache_manager.save(plot_cache_key, 1)  # Just a flag to indicate plot creation
+        cache_manager.save(plot_cache_key, "plot_created")  # Just a flag to indicate plot creation
     else:
         logging.info(f"Plots for {model_name} on {sample_name} already cached")
 
@@ -161,19 +161,36 @@ def average_parameters(params1, params2):
     return (np.array(params1) + np.array(params2)) / 2
 
 
-def evaluate_model(model_func, params, sample_data):
+def evaluate_model(model_func, params, sample_data, model_name, sample_name):
     """
-    Evaluate a model on sample data.
+    Evaluate a model on sample data and cache the result.
 
     Args:
-        model_func: The model function to evaluate
-        params: Model parameters
-        sample_data: The sample data to evaluate on
+        model_func: The model function to evaluate.
+        params: Model parameters.
+        sample_data: The sample data to evaluate on.
+        model_name: Name of the model.
+        sample_name: Name of the sample.
 
     Returns:
-        Mean squared error
+        Mean squared error.
     """
-    return calculate_loss(sample_data, model_func, params) / len(sample_data)
+
+    params_str = '_'.join(map(str, params))
+    sample_str = f"{sample_data[0]}_{sample_data[len(sample_data) // 2]}_{sample_data[-1]}"
+    cache_key = f"evaluate_{model_name}_{sample_name}_{params_str}_{sample_str}"
+    cached_result = cache_manager.load(cache_key)
+
+    if cached_result:
+        logging.info(f"Loaded evaluation for {model_name} on {sample_name} from cache")
+        return cached_result["loss"]
+
+    logging.info(f"Evaluating {model_name} on {sample_name}")
+    loss = calculate_loss(sample_data, model_func, params) / len(sample_data)
+
+    # Save the result to cache
+    cache_manager.save(cache_key, {"loss": loss})
+    return loss
 
 
 def create_weighted_model(models_with_params, sample_data, model_name, sample_name):
@@ -249,11 +266,11 @@ def create_weighted_model(models_with_params, sample_data, model_name, sample_na
                      model_name,
                      np.array([1.0]),  # Dummy parameter
                      sample_id=sample_name)
-        cache_manager.save(plot_cache_key, 1)  # Flag
+        cache_manager.save(plot_cache_key, "plot_created")  # Flag
     else:
         logging.info(f"Plots for weighted {model_name} on {sample_name} already cached")
 
-    # Save the result to cache.  Do NOT store the model functions.
+    # Save the result to cache.
     result_data = {
         "params": [(w, p.tolist()) for (_, w, p) in weighted_params],  # Store only weight and parameters
         "formula": formula
@@ -266,6 +283,12 @@ def create_weighted_model(models_with_params, sample_data, model_name, sample_na
 def analyze_and_compare_models():
     """Main analysis function that orchestrates the entire process."""
     logging.info("Starting LP operations complexity analysis")
+    main_cache_key = "main_results"
+    cached_main_results = cache_manager.load(main_cache_key)
+
+    if cached_main_results:
+        logging.info("Loaded main results from cache")
+        return cached_main_results
 
     # Define the ranges for m (constraints) and n (variables)
     m_range = [10, 20, 30, 40, 50, 60]
@@ -301,7 +324,7 @@ def analyze_and_compare_models():
 
     for model_name, model_func, initial_params in models:
         params_W1, formula_W1 = fit_model(model_func, initial_params, sample_W1, model_name, "W1")
-        score_W1 = evaluate_model(model_func, params_W1, sample_W1)
+        score_W1 = evaluate_model(model_func, params_W1, sample_W1, model_name, "W1")
 
         logging.info(f"Model {model_name} on W1: {formula_W1}, Score: {score_W1:.2f}")
 
@@ -314,21 +337,21 @@ def analyze_and_compare_models():
         # 4. Test the model with W1 parameters on W2
         params_W2, formula_W2 = fit_model(model_func, params_W1, sample_W2, model_name,
                                           "W2")  # Fit on W2 using W1 params as starting point
-        score_W2 = evaluate_model(model_func, params_W2, sample_W2)
+        score_W2 = evaluate_model(model_func, params_W2, sample_W2, model_name, "W2")
 
         logging.info(f"Model {model_name} on W2: {formula_W2}, Score: {score_W2:.2f}")
 
         # 5. Average parameters to reduce bias
         avg_params = average_parameters(params_W1, params_W2)
         avg_formula = format_parameter_equation(model_func.__name__, avg_params)
-        avg_score_W1 = evaluate_model(model_func, avg_params, sample_W1)
-        avg_score_W2 = evaluate_model(model_func, avg_params, sample_W2)
+        avg_score_W1 = evaluate_model(model_func, avg_params, sample_W1, model_name, "W1_avg")
+        avg_score_W2 = evaluate_model(model_func, avg_params, sample_W2, model_name, "W2_avg")
 
         logging.info(f"Averaged {model_name}: {avg_formula}")
         logging.info(f"Averaged {model_name} Score on W1: {avg_score_W1:.2f}")
         logging.info(f"Averaged {model_name} Score on W2: {avg_score_W2:.2f}")
 
-        # Store results - DO NOT STORE MODEL FUNCTIONS!
+        # Store results
         results[model_name] = {
             "params_W1": params_W1.tolist(),
             "formula_W1": formula_W1,
@@ -363,9 +386,8 @@ def analyze_and_compare_models():
         models_with_params, sample_L1, "Weighted Ensemble", "L1")
 
     # 8. Evaluate weighted model on L1 - extract params correctly from the tuple
-    weighted_score_L1 = calculate_loss(sample_L1,
-                                       lambda X, *_: weighted_ensemble_model(X, weighted_params_L1),
-                                       [1.0]) / len(sample_L1)
+    weighted_score_L1 = evaluate_model(lambda X, *_: weighted_ensemble_model(X, weighted_params_L1),
+                                       np.array([1.0]), sample_L1, "Weighted Ensemble", "L1")
 
     logging.info(f"Weighted model on L1: {weighted_formula_L1}")
     logging.info(f"Weighted model score on L1: {weighted_score_L1:.2f}")
@@ -382,9 +404,8 @@ def analyze_and_compare_models():
     weighted_params_L2, weighted_formula_L2 = create_weighted_model(
         models_with_params_L2, sample_L2, "Weighted Ensemble", "L2")
 
-    weighted_score_L2 = calculate_loss(sample_L2,
-                                       lambda X, *_: weighted_ensemble_model(X, weighted_params_L2),
-                                       [1.0]) / len(sample_L2)
+    weighted_score_L2 = evaluate_model(lambda X, *_: weighted_ensemble_model(X, weighted_params_L2),
+                                       np.array([1.0]), sample_L2, "Weighted Ensemble", "L2")
 
     logging.info(f"Weighted model on L2: {weighted_formula_L2}")
     logging.info(f"Weighted model score on L2: {weighted_score_L2:.2f}")
@@ -406,12 +427,10 @@ def analyze_and_compare_models():
         param_formula = format_parameter_equation(model_func.__name__, params)
         avg_weighted_formula += f"{weight:.4f} * ({param_formula})"
 
-    avg_weighted_score_L1 = calculate_loss(sample_L1,
-                                           lambda X, *_: weighted_ensemble_model(X, avg_weighted_params),
-                                           [1.0]) / len(sample_L1)
-    avg_weighted_score_L2 = calculate_loss(sample_L2,
-                                           lambda X, *_: weighted_ensemble_model(X, avg_weighted_params),
-                                           [1.0]) / len(sample_L2)
+    avg_weighted_score_L1 = evaluate_model(lambda X, *_: weighted_ensemble_model(X, avg_weighted_params),
+                                           np.array([1.0]), sample_L1, "Weighted Ensemble", "L1_avg")
+    avg_weighted_score_L2 = evaluate_model(lambda X, *_: weighted_ensemble_model(X, avg_weighted_params),
+                                           np.array([1.0]), sample_L2, "Weighted Ensemble", "L2_avg")
 
     logging.info(f"Averaged weighted model: {avg_weighted_formula}")
     logging.info(f"Averaged weighted model score on L1: {avg_weighted_score_L1:.2f}")
@@ -493,6 +512,7 @@ def analyze_and_compare_models():
 
     logging.info(f"  Best overall: {best_overall[0]} (Avg Score: {best_overall[1]:.2f})")
 
+    cache_manager.save(main_cache_key, results)
     return results
 
 
