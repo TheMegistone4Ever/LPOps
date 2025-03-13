@@ -71,7 +71,7 @@ def generate_sample(sample_name: str, m_range: Sequence[int], n_range: Sequence[
     Returns:
         List of tuples (m, n, problem_data, operation_count)
     """
-    sample_key = f"sample_{sample_name}_f{factor}"
+    sample_key = f"sample_{sample_name}_f{factor}_{len(m_range)}_{len(n_range)}_{num_runs}"
     cached_data = cache_manager.load(sample_key)
 
     if cached_data:
@@ -87,7 +87,7 @@ def generate_sample(sample_name: str, m_range: Sequence[int], n_range: Sequence[
             for problem_index in range(num_runs):
                 c, A, b, _ = generate_lp_problem(m, n, factor=factor)
 
-                problem_key = f"simplex_{m}_{n}_{factor}_{problem_index}"
+                problem_key = f"simplex_{sample_name}_f{factor}_{m}_{n}_{problem_index}"
                 cached_solution = cache_manager.load(problem_key)
 
                 if cached_solution:
@@ -120,7 +120,7 @@ def fit_model(model_func, initial_params, sample_data, model_name, sample_name):
     Returns:
         Tuple of (optimal parameters, formula string)
     """
-    cache_key = f"fit_{model_name}_{sample_name}"
+    cache_key = f"fit_{model_name}_{sample_name}_{len(sample_data)}"
     cached_result = cache_manager.load(cache_key)
 
     if cached_result:
@@ -141,7 +141,7 @@ def fit_model(model_func, initial_params, sample_data, model_name, sample_name):
     formula = format_parameter_equation(model_func.__name__, optimal_params)
 
     # Create visualization plots and cache them
-    plot_cache_key = f"plot_{model_name}_{sample_name}"
+    plot_cache_key = f"plot_{model_name}_{sample_name}_{len(sample_data)}"
     if not cache_manager.load(plot_cache_key):
         logging.info(f"Creating and caching plots for {model_name} on {sample_name}")
         create_plots(sample_data, model_func, model_name, optimal_params, sample_id=sample_name)
@@ -194,7 +194,7 @@ def evaluate_model(model_func, params, sample_data, model_name, sample_name):
         return cached_result["loss"]
 
     logging.info(f"Evaluating {model_name} on {sample_name}")
-    loss = calculate_loss(sample_data, model_func, params) / len(sample_data)
+    loss = calculate_loss(sample_data, model_func, params)
 
     # Save the result to cache
     cache_manager.save(cache_key, {"loss": loss})
