@@ -2,10 +2,9 @@ import json
 import logging
 import os
 import tempfile
-from collections.abc import Iterable
 from typing import Any, Optional
 
-from numpy import ndarray, array
+from numpy import ndarray, array, number
 
 
 def create_key(m: int, n: int, model_type: str) -> str:
@@ -100,19 +99,15 @@ class CacheManager:
         """Recursively convert lists back to ndarrays."""
 
         if isinstance(data, list):
-            # Check if this list *could* have been an ndarray
-            # AND make sure it's actually iterable before trying to iterate
-            if ((isinstance(data, Iterable)
-                 and all(isinstance(item, (int, float))
-                         for item in data))
-                    or (isinstance(data, Iterable)
-                        and data
-                        and isinstance(data[0], list)
-                        and all(isinstance(item, (int, float))
-                                for sublist in data
-                                for item in sublist))):
+            # Helper function to recursively check if all elements are numeric
+            def all_numeric(items):
+                if isinstance(items, list):
+                    return all(all_numeric(item) for item in items)
+                return isinstance(items, (int, float, number))
+
+            if all_numeric(data):
                 try:
-                    return array(data)  # Try converting back to ndarray
+                    return array(data)
                 except (ValueError, TypeError):
                     # If conversion fails, it was probably just a list
                     return [self._deserialize_data(item) for item in data]
