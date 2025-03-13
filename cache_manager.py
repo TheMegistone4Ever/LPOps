@@ -87,7 +87,7 @@ class CacheManager:
         """Load data from a file using """
 
         try:
-            # Check if key exists in set
+            # Check if key exists in a set
             if key not in self.key_map:
                 return None
 
