@@ -66,6 +66,7 @@ def generate_sample(sample_name: str, m_range: Sequence[int], n_range: Sequence[
         sample_name: Name of the sample for caching
         m_range: List of constraint counts to test
         n_range: List of variable counts to test
+        num_runs: Number of problems to generate for each m, n pair
         factor: Scaling factor for problem generation
 
     Returns:
@@ -134,7 +135,7 @@ def fit_model(model_func, initial_params, sample_data, model_name, sample_name):
         return calculate_loss(sample_data, model_func, params)
 
     # Optimize the parameters
-    result = minimize(loss_func, initial_params, method='Nelder-Mead')
+    result = minimize(loss_func, initial_params, method="Nelder-Mead")
     optimal_params = result.x
 
     # Create a formula string representation
@@ -226,7 +227,7 @@ def create_weighted_model(models_with_params, sample_data, model_name, sample_na
 
     logging.info(f"Creating weighted ensemble model for {sample_name}")
 
-    # Initial weights - normalize to sum to 1
+    # Initial weights - normalize to a sum to 1
     initial_weights = np.array([weight for _, weight, _ in models_with_params])
     initial_weights = initial_weights / np.sum(initial_weights)
 
@@ -236,13 +237,13 @@ def create_weighted_model(models_with_params, sample_data, model_name, sample_na
         normalized_weights = weights / np.sum(weights)
 
         # Create weighted ensemble model params
-        weighted_params = [(model_func, normalized_weights[i], params)
-                           for i, (model_func, _, params) in enumerate(models_with_params)]
+        weighted_params_eval = [(model_func, normalized_weights[i], params)
+                                for i, (model_func, _, params) in enumerate(models_with_params)]
 
         # Calculate loss
         X = [(d[0], d[1]) for d in sample_data]
         y_true = [d[3] for d in sample_data]
-        y_pred = [weighted_ensemble_model((m, n), weighted_params) for m, n in X]
+        y_pred = [weighted_ensemble_model((m, n), weighted_params_eval) for m, n in X]
 
         return np.sum((np.array(y_true) - np.array(y_pred)) ** 2)
 
@@ -303,11 +304,11 @@ def analyze_and_compare_models():
     n_range = list(range(200, 2001, 50))
     num_runs = 5
 
-    # 1. Generate sample W1 with default factor
+    # 1. Generate sample W1 with a default factor
     logging.info("Generating sample W1")
     sample_W1 = generate_sample("W1", m_range, n_range, num_runs, factor=1.0)
 
-    # 2. Generate sample W2 with different factor
+    # 2. Generate sample W2 with a different factor
     logging.info("Generating sample W2")
     sample_W2 = generate_sample("W2", m_range, n_range, num_runs, factor=2.0)
 
@@ -323,11 +324,10 @@ def analyze_and_compare_models():
     ]
 
     # Store results for each model
-    results = {}
+    results = dict()
 
     # 3. Fit models on sample W1
     logging.info("Fitting models on sample W1")
-    best_model_W1 = None
     best_model_name_W1 = None
     best_model_score_W1 = float('inf')
 
@@ -340,7 +340,6 @@ def analyze_and_compare_models():
         # Keep track of the best model on W1
         if score_W1 < best_model_score_W1:
             best_model_score_W1 = score_W1
-            best_model_W1 = (model_func, params_W1)
             best_model_name_W1 = model_name
 
         # 4. Test the model with W1 parameters on W2
@@ -376,12 +375,12 @@ def analyze_and_compare_models():
 
     logging.info(f"Best single model on W1: {best_model_name_W1}")
 
-    # 6. Generate samples L1 and L2 for weighted model
+    # 6. Generate samples L1 and L2 for a weighted model
     logging.info("Generating samples L1 and L2 for weighted model analysis")
     sample_L1 = generate_sample("L1", m_range, n_range, num_runs, factor=1.5)
     sample_L2 = generate_sample("L2", m_range, n_range, num_runs, factor=2.5)
 
-    # 7. Create weighted ensemble model on L1
+    # 7. Create a weighted ensemble model on L1
     logging.info("Creating weighted ensemble model on L1")
     models_with_params = []
     for model_name, model_func, _ in models:
@@ -428,7 +427,7 @@ def analyze_and_compare_models():
         avg_weight = (weight_L1 + weight_L2) / 2
         avg_weighted_params.append((model_L1, avg_weight, params_L1))
 
-    # Create formula for averaged weighted model
+    # Create formula for an averaged weighted model
     avg_weighted_formula = "Averaged Weighted Model: "
     for i, (model_func, weight, params) in enumerate(avg_weighted_params):
         if i > 0:
@@ -480,7 +479,7 @@ def analyze_and_compare_models():
     logging.info("\nBest Single Model:")
     logging.info("-" * 80)
 
-    # Find best model on W1, W2, and on average
+    # Find the best model on W1, W2, and on average
     best_W1 = min([(model_name, results[model_name]["score_W1"])
                    for model_name in results if model_name != "Weighted Ensemble"],
                   key=lambda x: x[1])
@@ -528,7 +527,7 @@ def analyze_and_compare_models():
 if __name__ == "__main__":
     start_time = time.time()
     logging.info(f"Starting analysis at {time.ctime(start_time)}!")
-    results = analyze_and_compare_models()
+    analysis_results = analyze_and_compare_models()
     end_time = time.time()
     logging.info(f"Analysis completed at {time.ctime(end_time)}!")
     logging.info(f"Analysis completed in {end_time - start_time:.2f} seconds")
