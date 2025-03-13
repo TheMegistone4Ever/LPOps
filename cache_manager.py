@@ -1,11 +1,11 @@
-import collections.abc
 import json
 import logging
 import os
 import tempfile
+from collections.abc import Iterable
 from typing import Any, Optional
 
-import numpy as np
+from numpy import ndarray, array
 
 
 def create_key(m: int, n: int, model_type: str) -> str:
@@ -85,7 +85,7 @@ class CacheManager:
     def _serialize_data(self, data: Any) -> Any:
         """Recursively convert ndarrays to lists."""
 
-        if isinstance(data, np.ndarray):
+        if isinstance(data, ndarray):
             return data.tolist()  # Convert ndarray to list
         elif isinstance(data, list):
             return [self._serialize_data(item) for item in data]
@@ -102,15 +102,17 @@ class CacheManager:
         if isinstance(data, list):
             # Check if this list *could* have been an ndarray
             # AND make sure it's actually iterable before trying to iterate
-            if ((isinstance(data, collections.abc.Iterable)
+            if ((isinstance(data, Iterable)
                  and all(isinstance(item, (int, float))
                          for item in data))
-                    or (data and isinstance(data[0], list)
+                    or (isinstance(data, Iterable)
+                        and data
+                        and isinstance(data[0], list)
                         and all(isinstance(item, (int, float))
                                 for sublist in data
                                 for item in sublist))):
                 try:
-                    return np.array(data)  # Try converting back to ndarray
+                    return array(data)  # Try converting back to ndarray
                 except (ValueError, TypeError):
                     # If conversion fails, it was probably just a list
                     return [self._deserialize_data(item) for item in data]
