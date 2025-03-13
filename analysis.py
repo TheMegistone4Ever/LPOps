@@ -1,621 +1,469 @@
 import logging
-import os
-import re
 import time
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
-import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import minimize
 
 from cache_manager import CacheManager
 from generator import generate_lp_problem
+from models import (
+    borgwardt_model,
+    smoothed_analysis_model,
+    adler_megiddo_model,
+    refined_borgwardt_model,
+    general_model,
+    general_model_log,
+    general_model_mixed,
+    weighted_ensemble_model
+)
 from simplex import simplex_method
+from utils import create_plots, calculate_loss
 
+# Setup logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("analysis_1.log", mode="w"),
+        logging.FileHandler("analysis.log", mode="w"),
         logging.StreamHandler()
     ]
 )
 
+# Initialize cache manager
 cache_manager = CacheManager()
 
 
-# Model definitions
-def borgwardt_model(X: Tuple[np.ndarray, np.ndarray], a: float) -> np.ndarray:
-    """Borgwardt's Model: O(m^2 * n^(1/(m-1))) -> O(m^3 * n) when m scales with n."""
-    m, n = X
-    return a * m ** 3 * n
-
-
-def smoothed_analysis_model(X: Tuple[np.ndarray, np.ndarray], a: float, b: float) -> np.ndarray:
-    """Smoothed Analysis Model: O(mn^5 * log^b(n))."""
-    m, n = X
-    return a * m * n ** 5 * np.log(n) ** b
-
-
-def adler_megiddo_model(X: Tuple[np.ndarray, np.ndarray], a: float) -> np.ndarray:
-    """Adler-Megiddo Model: O(n^4)."""
-    m, n = X
-    return a * n ** 4
-
-
-def refined_borgwardt_model(X: Tuple[np.ndarray, np.ndarray], a: float) -> np.ndarray:
-    """Refined bound: O(m^3n^2)."""
-    m, n = X
-    return a * m ** 3 * n ** 2
-
-
-def general_model(X: Tuple[np.ndarray, np.ndarray], a: float, b: float, c: float) -> np.ndarray:
-    """General model O(m^a n^b)."""
-    m, n = X
-    return a * m ** b * n ** c
-
-
-def general_model_log(X: Tuple[np.ndarray, np.ndarray], a: float, b: float, c: float, d: float) -> np.ndarray:
-    """General model with log terms: O(m^a * n^b * log(n)^c)."""
-    m, n = X
-    log_n = np.where(n > 1, np.log(n), 0)
-    return a * (m ** b) * (n ** c) * log_n ** d
-
-
-def general_model_mixed(X: Tuple[np.ndarray, np.ndarray], a: float, b: float, c: float, d: float, e: float,
-                        f: float, g: float) -> np.ndarray:
-    """General model with mixed terms: O(m^a * n^b * log(n)^c + d * m^e * n^f)."""
-    m, n = X
-    log_n = np.where(n > 1, np.log(n), 0)
-    return a * (m ** b) * (n ** c) * (log_n ** d) + e * (m ** f) * (n ** g)
-
-
-def weighted_ensemble_model(X: Tuple[np.ndarray, np.ndarray], *params) -> np.ndarray:
-    """
-    Weighted ensemble of models.
-    Parameters structure:
-    [weight1, a1, weight2, a2, b2, weight3, a3, weight4, a4, weight5, a5, b5, c5, d5, e5, f5, g5]
-    """
-    m, n = X
-
-    # Extract weights and individual model parameters
-    w1, a1 = params[0], params[1]  # Borgwardt
-    w2, a2, b2 = params[2], params[3], params[4]  # Smoothed Analysis
-    w3, a3 = params[5], params[6]  # Adler-Megiddo
-    w4, a4 = params[7], params[8]  # Refined Borgwardt
-    w5, a5, b5, c5, d5, e5, f5, g5 = params[9], params[10], params[11], params[12], params[13], params[14], params[15], \
-        params[16]  # General Mixed
-
-    # Combine models
-    return (w1 * borgwardt_model(X, a1) +
-            w2 * smoothed_analysis_model(X, a2, b2) +
-            w3 * adler_megiddo_model(X, a3) +
-            w4 * refined_borgwardt_model(X, a4) +
-            w5 * general_model_mixed(X, a5, b5, c5, d5, e5, f5, g5))
-
-
-def collect_data(m_values: List[int], n_values: List[int], sample_id: str = "W1", sample_idx: int = 1,
-                 num_runs: int = 5) -> List[Tuple]:
-    """Collect computational data with caching."""
-    data = []
-    for m in m_values:
-        for n in n_values:
-            key = f"{sample_id}_{m}_{n}_base_computation"
-            cached_result = cache_manager.load(key)
-
-            if cached_result is not None:
-                data.append(tuple(cached_result))
-                continue
-
-            # Compute if not cached
-            total_iterations = 0
-            total_operations = 0
-            total_time = 0
-
-            for run in range(num_runs):
-                c, A, b, _ = generate_lp_problem(m, n, factor=sample_idx)
-                start_time = time.time()
-                _, _, iterations, operations = simplex_method(c, A, b)
-                end_time = time.time()
-
-                total_iterations += iterations
-                total_operations += operations
-                total_time += (end_time - start_time)
-
-                logging.debug(f"Sample {sample_id}, Run {run + 1}/{num_runs}: m={m}, n={n}, "
-                              f"iterations={iterations}, operations={operations}, "
-                              f"time={end_time - start_time:.4f}s")
-
-            # Calculate averages
-            result = (
-                m,
-                n,
-                total_iterations / num_runs,
-                total_operations / num_runs,
-                total_time / num_runs
-            )
-
-            # Cache result
-            cache_manager.save(key, result)
-            data.append(result)
-
-            logging.info(f"Sample {sample_id}, m={m}, n={n}: avg_iterations={result[2]:.2f}, "
-                         f"avg_operations={result[3]:.2f}, avg_time={result[4]:.4f}s")
-
-    return data
-
-
-def calculate_loss(data: List[Tuple], model_func: callable, params: np.ndarray) -> float:
-    """Calculate a sum of squared errors for a model."""
-    X = [(d[0], d[1]) for d in data]
-    y_true = [d[3] for d in data]
-    y_pred = [model_func((m, n), *params) for m, n in X]
-    return np.sum((np.array(y_true) - np.array(y_pred)) ** 2)
-
-
-def create_plots(data: List[Tuple], model_func: callable, model_name: str,
-                 params: np.ndarray, plot_dir: str = "plots", sample_id: str = ""):
-    """Create visualization plots in both linear and logarithmic scales."""
-    if not os.path.exists(plot_dir):
-        os.makedirs(plot_dir)
-
-    safe_name = re.sub(r"[\\/*?:'<>|]", "", model_name)
-    sample_suffix = f"_{sample_id}" if sample_id else ""
-
-    # Create separate figures for linear and log scales
-    for scale in ["linear", "log"]:
-        plt.figure(figsize=(30, 20), dpi=200)
-
-        # Plot against m
-        plt.subplot(1, 2, 1)
-        for n in sorted(set(d[1] for d in data)):
-            m_vals = [d[0] for d in data if d[1] == n]
-            ops = [d[3] for d in data if d[1] == n]
-            plt.plot(m_vals, ops, "o-", label=f"n={n}")
-
-            if params is not None:
-                m_range = np.linspace(min(m_vals), max(m_vals), 100)
-                plt.plot(m_range,
-                         model_func((m_range, np.full_like(m_range, n)), *params),
-                         "--", label=f"Fit n={n}")
-
-        plt.xlabel("m")
-        plt.ylabel("Operations")
-        plt.title(
-            f"{model_name} - Operations vs. m ({scale.capitalize()} Scale){" - " + sample_id if sample_id else ""}")
-        if scale == "log":
-            plt.yscale("log")
-        plt.legend()
-        plt.grid(True, which="both", ls="-", alpha=0.2)
-
-        # Plot against n
-        plt.subplot(1, 2, 2)
-        for m in sorted(set(d[0] for d in data)):
-            n_vals = [d[1] for d in data if d[0] == m]
-            ops = [d[3] for d in data if d[0] == m]
-            plt.plot(n_vals, ops, "o-", label=f"m={m}")
-
-            if params is not None:
-                n_range = np.linspace(min(n_vals), max(n_vals), 100)
-                plt.plot(n_range,
-                         model_func((np.full_like(n_range, m), n_range), *params),
-                         "--", label=f"Fit m={m}")
-
-        plt.xlabel("n")
-        plt.ylabel("Operations")
-        plt.title(
-            f"{model_name} - Operations vs. n ({scale.capitalize()} Scale){" - " + sample_id if sample_id else ""}")
-        if scale == "log":
-            plt.yscale("log")
-        plt.legend()
-        plt.grid(True, which="both", ls="-", alpha=0.2)
-
-        plt.tight_layout()
-        plt.savefig(f"{plot_dir}/{safe_name}{sample_suffix}_{scale}_2d.png")
-        plt.close()
-
-    # 3D Plots (both scales)
-    if params is not None:
-        for scale in ["linear", "log"]:
-            m_vals = sorted(set(d[0] for d in data))
-            n_vals = sorted(set(d[1] for d in data))
-            m_grid, n_grid = np.meshgrid(m_vals, n_vals)
-            ops_grid = model_func((m_grid, n_grid), *params)
-
-            fig = plt.figure(figsize=(30, 20), dpi=200)
-            ax = fig.add_subplot(111, projection="3d")
-
-            if scale == "log":
-                ops_grid = np.log10(ops_grid)
-
-            surf = ax.plot_surface(m_grid, n_grid, ops_grid, cmap="viridis", alpha=0.7)
-
-            # Plot actual data points
-            m_data = [d[0] for d in data]
-            n_data = [d[1] for d in data]
-            ops_data = [d[3] for d in data]
-
-            if scale == "log":
-                ops_data = np.log10(ops_data)
-
-            ax.scatter(m_data, n_data, ops_data, c="red", marker="o", label="Actual Data")
-
-            ax.set_xlabel("m")
-            ax.set_ylabel("n")
-            ax.set_zlabel("Operations (log10)" if scale == "log" else "Operations")
-            ax.set_title(f"3D Plot - {model_name} ({scale.capitalize()} Scale){" - " + sample_id if sample_id else ""}")
-            plt.colorbar(surf)
-            ax.legend()
-            ax.grid(True)
-
-            plt.savefig(f"{plot_dir}/{safe_name}{sample_suffix}_{scale}_3d.png")
-            plt.close()
-
-
-def fit_model(data: List[Tuple], model_func: callable, model_name: str,
-              sample_id: str = "W1", initial_params: Optional[np.ndarray] = None) -> Tuple[Optional[np.ndarray], float]:
-    """Fit model to data with caching."""
-
-    key = f"model_fit_{sample_id}_{model_name.replace(" ", "_").lower()}_{"_".join(str(d[0]) + "_" + str(d[1]) for d in data[:3])}"
-
-    cached_result = cache_manager.load(key)
-    if cached_result is not None:
-        return np.array(cached_result[0]), cached_result[1]
-
-    X = np.array([(d[0], d[1]) for d in data]).T
-    y = np.array([d[3] for d in data])
-
-    try:
-        if initial_params is None:
-            initial_guess = [1.0] * (model_func.__code__.co_argcount - 1)
-        else:
-            initial_guess = initial_params.tolist()
-
-        # Define default bounds
-        bounds = [(1e-6, None)] * len(initial_guess)
-
-        # For weighted ensemble model, we need special constraints
-        weight_indices = []
-        constraints = []
-
-        if model_func.__name__ == "weighted_ensemble_model":
-            # Identify weight indices in the parameter array
-            weight_indices = [0, 2, 5, 7, 9]
-
-            # Normalize weights to sum to 1
-            weights = [initial_guess[i] for i in weight_indices]
-            total = sum(weights)
-            if total > 0:
-                for i in weight_indices:
-                    initial_guess[i] /= total
-
-            # Set bounds for weights to be between 0 and 1
-            for i in weight_indices:
-                bounds[i] = (0.0, 1.0)
-
-            # Define a constraint that weights must sum to 1
-            def weight_constraint(params):
-                return sum(params[i] for i in weight_indices) - 1.0
-
-            constraints = [{'type': 'eq', 'fun': weight_constraint}]
-
-        def objective(params):
-            predictions = [model_func((m, n), *params) for m, n in zip(X[0], X[1])]
-            return np.sum((np.array(predictions) - np.array(y)) ** 2)
-
-        # Use SLSQP for constrained optimization (when we have constraints)
-        method = "SLSQP" if constraints else "L-BFGS-B"
-
-        result = minimize(
-            objective,
-            initial_guess,
-            bounds=bounds,
-            method=method,
-            constraints=constraints if constraints else None
-        )
-
-        if result.success:
-            params = result.x
-            loss = result.fun
-            cache_manager.save(key, (params.tolist(), loss))
-            create_plots(data, model_func, model_name, params, sample_id=sample_id)
-            return params, loss
-        else:
-            logging.error(f"Optimization failed for {model_name} on sample {sample_id}: {result.message}")
-            return None, float("inf")
-
-    except Exception as e:
-        logging.error(f"Fitting failed for {model_name} on sample {sample_id}: {str(e)}")
-        return None, float("inf")
-
-
-def format_parameter_equation(model_name, params, model_func):
-    """Format model parameters as an equation string."""
-    if model_name == "Borgwardt's Model":
-        return f"Operations = {params[0]:.6f} × m³ × n"
-    elif model_name == "Smoothed Analysis Model":
-        return f"Operations = {params[0]:.6f} × m × n⁵ × log(n)^{params[1]:.6f}"
-    elif model_name == "Adler-Megiddo Model":
-        return f"Operations = {params[0]:.6f} × n⁴"
-    elif model_name == "Refined Borgwardt Model":
-        return f"Operations = {params[0]:.6f} × m³ × n²"
-    elif model_name == "General Model":
-        return f"Operations = {params[0]:.6f} × m^{params[1]:.6f} × n^{params[2]:.6f}"
-    elif model_name == "General Model with Log":
-        return f"Operations = {params[0]:.6f} × m^{params[1]:.6f} × n^{params[2]:.6f} × log(n)^{params[3]:.6f}"
-    elif model_name == "General Model Mixed":
-        return f"Operations = {params[0]:.6f} × m^{params[1]:.6f} × n^{params[2]:.6f} × log(n)^{params[3]:.6f} + {params[4]:.6f} × m^{params[5]:.6f} × n^{params[6]:.6f}"
-    elif model_name == "Weighted Ensemble Model":
-        # Generate ensemble equation
-        weight_indices = [0, 2, 5, 7, 9]
-        terms = []
-
-        # Borgwardt term
-        if params[0] > 10e-8:  # Only include terms with significant weights
-            terms.append(f"{params[0]:.4f} × ({params[1]:.6f} × m³ × n)")
-
-        # Smoothed Analysis term
-        if params[2] > 10e-8:
-            terms.append(f"{params[2]:.4f} × ({params[3]:.6f} × m × n⁵ × log(n)^{params[4]:.6f})")
-
-        # Adler-Megiddo term
-        if params[5] > 10e-8:
-            terms.append(f"{params[5]:.4f} × ({params[6]:.6f} × n⁴)")
-
-        # Refined Borgwardt term
-        if params[7] > 10e-8:
-            terms.append(f"{params[7]:.4f} × ({params[8]:.6f} × m³ × n²)")
-
-        # General Model Mixed term
-        if params[9] > 10e-8:
-            terms.append(
-                f"{params[9]:.4f} × ({params[10]:.6f} × m^{params[11]:.6f} × n^{params[12]:.6f} × log(n)^{params[13]:.6f} + {params[14]:.6f} × m^{params[15]:.6f} × n^{params[16]:.6f})")
-
-        return "Operations = " + " + ".join(terms)
+def format_parameter_equation(model_name: str, params: np.ndarray) -> str:
+    """Format model parameters as a readable equation string."""
+    if model_name == "borgwardt_model":
+        return f"{params[0]:.6f} * m^3 * n"
+    elif model_name == "smoothed_analysis_model":
+        return f"{params[0]:.6f} * m * n^5 * log(n)^{params[1]:.6f}"
+    elif model_name == "adler_megiddo_model":
+        return f"{params[0]:.6f} * n^4"
+    elif model_name == "refined_borgwardt_model":
+        return f"{params[0]:.6f} * m^3 * n^2"
+    elif model_name == "general_model":
+        return f"{params[0]:.6f} * m^{params[1]:.6f} * n^{params[2]:.6f}"
+    elif model_name == "general_model_log":
+        return f"{params[0]:.6f} * m^{params[1]:.6f} * n^{params[2]:.6f} * log(n)^{params[3]:.6f}"
+    elif model_name == "general_model_mixed":
+        return (f"{params[0]:.6f} * m^{params[1]:.6f} * n^{params[2]:.6f} * log(n)^{params[3]:.6f} + "
+                f"{params[4]:.6f} * m^{params[5]:.6f} * n^{params[6]:.6f}")
     else:
-        return "Unknown model"
+        return f"Unknown model: {model_name} with params {params}"
 
 
-def main(num_samples: int = 2):
-    # Configuration
-    m_values = list(range(200, 2001, 50))
-    n_values = list(range(200, 2001, 50))
-    num_runs = 5
+def generate_sample(sample_name: str, m_range: List[int], n_range: List[int], factor: float = 1.0) -> List[Tuple]:
+    """
+    Generate a sample of LP problems and record their simplex performance.
 
-    # Models to test (for individual analysis)
+    Args:
+        sample_name: Name of the sample for caching
+        m_range: List of constraint counts to test
+        n_range: List of variable counts to test
+        factor: Scaling factor for problem generation
+
+    Returns:
+        List of tuples (m, n, problem_data, operation_count)
+    """
+    sample_key = f"sample_{sample_name}_f{factor}"
+    cached_data = cache_manager.load(sample_key)
+
+    if cached_data:
+        logging.info(f"Loaded sample {sample_name} from cache")
+        return cached_data
+
+    logging.info(f"Generating sample {sample_name} with factor {factor}")
+    sample_data = []
+
+    for m in m_range:
+        for n in n_range:
+            # Generate multiple problems for each (m,n) pair
+            for _ in range(3):  # Generate 3 problems for each configuration
+                logging.info(f"Generating LP problem with m={m}, n={n}")
+                c, A, b, _ = generate_lp_problem(m, n, factor=factor)
+
+                # Solve the problem and record operation count
+                solution, objective, iterations, flops = simplex_method(c, A, b)
+                sample_data.append((m, n, (c, A, b, solution, objective), flops))
+
+                logging.info(f"Problem solved in {iterations} iterations, {flops} operations")
+
+    cache_manager.save(sample_key, sample_data)
+    return sample_data
+
+
+def fit_model(model_func, initial_params, sample_data, model_name, sample_name):
+    """
+    Fit a model to the sample data.
+
+    Args:
+        model_func: The model function to fit
+        initial_params: Initial parameter values
+        sample_data: The sample data to fit to
+        model_name: Name of the model
+        sample_name: Name of the sample
+
+    Returns:
+        Tuple of (optimal parameters, formula string)
+    """
+    cache_key = f"fit_{model_name}_{sample_name}"
+    cached_result = cache_manager.load(cache_key)
+
+    if cached_result:
+        logging.info(f"Loaded fit for {model_name} on {sample_name} from cache")
+        return cached_result["params"], cached_result["formula"]
+
+    logging.info(f"Fitting {model_name} to sample {sample_name}")
+
+    # Define the loss function for optimization
+    def loss_func(params):
+        return calculate_loss(sample_data, model_func, params)
+
+    # Optimize the parameters
+    result = minimize(loss_func, initial_params, method='Nelder-Mead')
+    optimal_params = result.x
+
+    # Create a formula string representation
+    formula = format_parameter_equation(model_func.__name__, optimal_params)
+
+    # Create visualization plots
+    create_plots(sample_data, model_func, model_name, optimal_params, sample_id=sample_name)
+
+    # Save the result to cache
+    result_data = {"params": optimal_params.tolist(), "formula": formula}
+    cache_manager.save(cache_key, result_data)
+
+    return optimal_params, formula
+
+
+def average_parameters(params1, params2):
+    """
+    Average two sets of parameters.
+
+    Args:
+        params1: First set of parameters
+        params2: Second set of parameters
+
+    Returns:
+        Averaged parameters
+    """
+    return (np.array(params1) + np.array(params2)) / 2
+
+
+def evaluate_model(model_func, params, sample_data):
+    """
+    Evaluate a model on sample data.
+
+    Args:
+        model_func: The model function to evaluate
+        params: Model parameters
+        sample_data: The sample data to evaluate on
+
+    Returns:
+        Mean squared error
+    """
+    return calculate_loss(sample_data, model_func, params) / len(sample_data)
+
+
+def create_weighted_model(models_with_params, sample_data, model_name, sample_name):
+    """
+    Create a weighted ensemble model.
+
+    Args:
+        models_with_params: List of (model_func, initial_weight, params)
+        sample_data: Sample data to fit to
+        model_name: Name of the model
+        sample_name: Name of the sample
+
+    Returns:
+        Tuple of (optimal weights and params, formula string)
+    """
+    cache_key = f"weighted_{model_name}_{sample_name}"
+    cached_result = cache_manager.load(cache_key)
+
+    if cached_result:
+        logging.info(f"Loaded weighted model {model_name} on {sample_name} from cache")
+        return cached_result["params"], cached_result["formula"]
+
+    logging.info(f"Creating weighted ensemble model for {sample_name}")
+
+    # Initial weights - normalize to sum to 1
+    initial_weights = np.array([weight for _, weight, _ in models_with_params])
+    initial_weights = initial_weights / np.sum(initial_weights)
+
+    # Define the loss function for optimization
+    def loss_func(weights):
+        # Normalize weights to sum to 1
+        normalized_weights = weights / np.sum(weights)
+
+        # Create weighted ensemble model params
+        weighted_params = [(model_func, normalized_weights[i], params)
+                           for i, (model_func, _, params) in enumerate(models_with_params)]
+
+        # Calculate loss
+        X = [(d[0], d[1]) for d in sample_data]
+        y_true = [d[3] for d in sample_data]
+        y_pred = [weighted_ensemble_model((m, n), weighted_params) for m, n in X]
+
+        return np.sum((np.array(y_true) - np.array(y_pred)) ** 2)
+
+    # Use bounds to ensure positive weights
+    bounds = [(0.001, None) for _ in range(len(initial_weights))]
+
+    # Optimize the weights
+    result = minimize(loss_func, initial_weights, method='L-BFGS-B', bounds=bounds)
+    optimal_weights = result.x / np.sum(result.x)  # Normalize weights
+
+    # Create weighted model parameters
+    weighted_params = [(model_func, optimal_weights[i], params)
+                       for i, (model_func, _, params) in enumerate(models_with_params)]
+
+    # Create formula representation
+    formula = "Weighted Model: "
+    for i, (model_func, weight, params) in enumerate(weighted_params):
+        if i > 0:
+            formula += " + "
+        param_formula = format_parameter_equation(model_func.__name__, params)
+        formula += f"{weight:.4f} * ({param_formula})"
+
+    # Create visualization plots
+    create_plots(sample_data,
+                 lambda X, *_: weighted_ensemble_model(X, weighted_params),
+                 model_name,
+                 np.array([1.0]),  # Dummy parameter
+                 sample_id=sample_name)
+
+    # Save the result to cache
+    result_data = {"params": weighted_params, "formula": formula}
+    cache_manager.save(cache_key, result_data)
+
+    return weighted_params, formula
+
+
+def analyze_and_compare_models():
+    """Main analysis function that orchestrates the entire process."""
+    logging.info("Starting LP operations complexity analysis")
+
+    # Define the ranges for m (constraints) and n (variables)
+    m_range = [10, 20, 30, 40, 50, 60]
+    n_range = [5, 10, 15, 20, 25, 30]
+
+    # 1. Generate sample W1 with default factor
+    logging.info("Generating sample W1")
+    sample_W1 = generate_sample("W1", m_range, n_range, factor=1.0)
+
+    # 2. Generate sample W2 with different factor
+    logging.info("Generating sample W2")
+    sample_W2 = generate_sample("W2", m_range, n_range, factor=2.0)
+
+    # Define the models to test
     models = [
-        (borgwardt_model, "Borgwardt's Model"),
-        (smoothed_analysis_model, "Smoothed Analysis Model"),
-        (adler_megiddo_model, "Adler-Megiddo Model"),
-        (refined_borgwardt_model, "Refined Borgwardt Model"),
-        (general_model, "General Model"),
-        (general_model_log, "General Model with Log"),
-        (general_model_mixed, "General Model Mixed")
+        ("Borgwardt", borgwardt_model, [1.0]),  # Initial parameters
+        ("Smoothed Analysis", smoothed_analysis_model, [1.0, 1.0]),
+        ("Adler-Megiddo", adler_megiddo_model, [1.0]),
+        ("Refined Borgwardt", refined_borgwardt_model, [1.0]),
+        ("General", general_model, [1.0, 1.0, 1.0]),
+        ("General Log", general_model_log, [1.0, 1.0, 1.0, 1.0]),
+        ("General Mixed", general_model_mixed, [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
     ]
 
-    # Store fitted parameters for each model across samples
-    all_models_params = {model_name: [] for _, model_name in models}
-    all_models_params["Weighted Ensemble Model"] = []
+    # Store results for each model
+    results = {}
 
-    # Store losses for each model across samples
-    all_models_losses = {model_name: [] for _, model_name in models}
-    all_models_losses["Weighted Ensemble Model"] = []
+    # 3. Fit models on sample W1
+    logging.info("Fitting models on sample W1")
+    best_model_W1 = None
+    best_model_name_W1 = None
+    best_model_score_W1 = float('inf')
 
-    # Dictionary to store best single model parameters from each sample
-    best_single_models = {}
+    for model_name, model_func, initial_params in models:
+        params_W1, formula_W1 = fit_model(model_func, initial_params, sample_W1, model_name, "W1")
+        score_W1 = evaluate_model(model_func, params_W1, sample_W1)
 
-    # Process each sample
-    for sample_idx in range(1, num_samples + 1):
-        sample_id = f"W{sample_idx}"
-        logging.info(f"Processing sample {sample_id}...")
+        logging.info(f"Model {model_name} on W1: {formula_W1}, Score: {score_W1:.2f}")
 
-        # Collect data for this sample
-        data = collect_data(m_values, n_values, sample_id, sample_idx, num_runs)
+        # Keep track of the best model on W1
+        if score_W1 < best_model_score_W1:
+            best_model_score_W1 = score_W1
+            best_model_W1 = (model_func, params_W1)
+            best_model_name_W1 = model_name
 
-        # Fit individual models
-        sample_best_model = None
-        sample_best_loss = float("inf")
-        sample_best_model_name = ""
-        sample_best_params = None
+        # 4. Test the model with W1 parameters on W2
+        params_W2, formula_W2 = fit_model(model_func, params_W1, sample_W2, model_name, "W2")
+        score_W2 = evaluate_model(model_func, params_W2, sample_W2)
 
-        # Dictionary to store all fitted models for this sample (for ensemble)
-        sample_fitted_models = {}
+        logging.info(f"Model {model_name} on W2: {formula_W2}, Score: {score_W2:.2f}")
 
-        for model_func, model_name in models:
-            logging.info(f"Fitting {model_name} on sample {sample_id}...")
+        # 5. Average parameters to reduce bias
+        avg_params = average_parameters(params_W1, params_W2)
+        avg_formula = format_parameter_equation(model_func.__name__, avg_params)
+        avg_score_W1 = evaluate_model(model_func, avg_params, sample_W1)
+        avg_score_W2 = evaluate_model(model_func, avg_params, sample_W2)
 
-            # Check if we have parameters from a previous sample to use as initial guess
-            initial_params = None
-            if sample_idx > 1 and all_models_params[model_name]:
-                initial_params = np.array(all_models_params[model_name][0])  # Use first sample's params
+        logging.info(f"Averaged {model_name}: {avg_formula}")
+        logging.info(f"Averaged {model_name} Score on W1: {avg_score_W1:.2f}")
+        logging.info(f"Averaged {model_name} Score on W2: {avg_score_W2:.2f}")
 
-            params, loss = fit_model(data, model_func, model_name, sample_id, initial_params)
-
-            # Store the fitted parameters and loss
-            if params is not None:
-                all_models_params[model_name].append(params)
-                all_models_losses[model_name].append(loss)
-
-                # Save for ensemble model
-                sample_fitted_models[model_name] = (params, loss)
-
-                if loss < sample_best_loss:
-                    sample_best_loss = loss
-                    sample_best_model = (model_func, params)
-                    sample_best_model_name = model_name
-                    sample_best_params = params
-
-        # Save the best model for this sample
-        best_single_models[sample_id] = {
-            "name": sample_best_model_name,
-            "parameters": sample_best_params.tolist() if sample_best_params is not None else None,
-            "loss": sample_best_loss
+        # Store results
+        results[model_name] = {
+            "params_W1": params_W1,
+            "formula_W1": formula_W1,
+            "score_W1": score_W1,
+            "params_W2": params_W2,
+            "formula_W2": formula_W2,
+            "score_W2": score_W2,
+            "avg_params": avg_params,
+            "avg_formula": avg_formula,
+            "avg_score_W1": avg_score_W1,
+            "avg_score_W2": avg_score_W2
         }
 
-        # Check if we have all required models fitted successfully
-        if len(sample_fitted_models) < len(models):
-            logging.warning(f"Some models failed to fit for sample {sample_id}. Skipping ensemble model.")
-            continue
+    logging.info(f"Best single model on W1: {best_model_name_W1}")
 
-        # Build and fit the ensemble model
-        logging.info(f"Building ensemble model on sample {sample_id}...")
+    # 6. Generate samples L1 and L2 for weighted model
+    logging.info("Generating samples L1 and L2 for weighted model analysis")
+    sample_L1 = generate_sample("L1", m_range, n_range, factor=1.5)
+    sample_L2 = generate_sample("L2", m_range, n_range, factor=2.5)
 
-        # Initial weights give equal importance to the 5 models in the ensemble
-        ensemble_initial_params = []
+    # 7. Create weighted ensemble model on L1
+    logging.info("Creating weighted ensemble model on L1")
+    models_with_params = []
+    for model_name, model_func, _ in models:
+        # Use the averaged parameters from W1 and W2
+        avg_params = results[model_name]["avg_params"]
+        # Initial weight proportional to inverse of score (better model = higher weight)
+        initial_weight = 1.0 / max(1e-6, results[model_name]["avg_score_W1"])
+        models_with_params.append((model_func, initial_weight, avg_params))
 
-        # Add Borgwardt's Model parameters
-        borgwardt_params = sample_fitted_models["Borgwardt's Model"][0]
-        ensemble_initial_params.extend([0.2, borgwardt_params[0]])
+    weighted_params_L1, weighted_formula_L1 = create_weighted_model(
+        models_with_params, sample_L1, "Weighted Ensemble", "L1")
 
-        # Add Smoothed Analysis Model parameters
-        smoothed_params = sample_fitted_models["Smoothed Analysis Model"][0]
-        ensemble_initial_params.extend([0.2, smoothed_params[0], smoothed_params[1]])
+    # 8. Evaluate weighted model on L1
+    weighted_score_L1 = calculate_loss(sample_L1,
+                                       lambda X, *_: weighted_ensemble_model(X, weighted_params_L1),
+                                       [1.0]) / len(sample_L1)
 
-        # Add Adler-Megiddo Model parameters
-        adler_params = sample_fitted_models["Adler-Megiddo Model"][0]
-        ensemble_initial_params.extend([0.2, adler_params[0]])
+    logging.info(f"Weighted model on L1: {weighted_formula_L1}")
+    logging.info(f"Weighted model score on L1: {weighted_score_L1:.2f}")
 
-        # Add Refined Borgwardt Model parameters
-        refined_params = sample_fitted_models["Refined Borgwardt Model"][0]
-        ensemble_initial_params.extend([0.2, refined_params[0]])
+    # 9. Test weighted model on L2
+    logging.info("Testing weighted model on L2")
+    weighted_params_L2, weighted_formula_L2 = create_weighted_model(
+        weighted_params_L1, sample_L2, "Weighted Ensemble", "L2")
 
-        # Add General Model Mixed parameters
-        mixed_params = sample_fitted_models["General Model Mixed"][0]
-        ensemble_initial_params.extend([0.2, mixed_params[0], mixed_params[1], mixed_params[2],
-                                        mixed_params[3], mixed_params[4], mixed_params[5], mixed_params[6]])
+    weighted_score_L2 = calculate_loss(sample_L2,
+                                       lambda X, *_: weighted_ensemble_model(X, weighted_params_L2),
+                                       [1.0]) / len(sample_L2)
 
-        # Check if we have ensemble parameters from a previous sample
-        ensemble_params_from_prev = None
-        if sample_idx > 1 and all_models_params["Weighted Ensemble Model"]:
-            ensemble_params_from_prev = np.array(all_models_params["Weighted Ensemble Model"][0])
+    logging.info(f"Weighted model on L2: {weighted_formula_L2}")
+    logging.info(f"Weighted model score on L2: {weighted_score_L2:.2f}")
 
-        # Fit the ensemble model
-        ensemble_params, ensemble_loss = fit_model(
-            data,
-            weighted_ensemble_model,
-            "Weighted Ensemble Model",
-            f"L{sample_idx}",
-            initial_params=ensemble_params_from_prev if ensemble_params_from_prev is not None else np.array(
-                ensemble_initial_params)
-        )
+    # 10. Average weighted model parameters
+    # For weighted models, we average the weights
+    avg_weighted_params = []
+    for i in range(len(weighted_params_L1)):
+        model_L1, weight_L1, params_L1 = weighted_params_L1[i]
+        model_L2, weight_L2, params_L2 = weighted_params_L2[i]
+        avg_weight = (weight_L1 + weight_L2) / 2
+        avg_weighted_params.append((model_L1, avg_weight, params_L1))
 
-        # Store ensemble model parameters and loss if fitting was successful
-        if ensemble_params is not None:
-            all_models_params["Weighted Ensemble Model"].append(ensemble_params)
-            all_models_losses["Weighted Ensemble Model"].append(ensemble_loss)
-        else:
-            logging.warning(f"Ensemble model fitting failed for sample {sample_id}")
+    # Create formula for averaged weighted model
+    avg_weighted_formula = "Averaged Weighted Model: "
+    for i, (model_func, weight, params) in enumerate(avg_weighted_params):
+        if i > 0:
+            avg_weighted_formula += " + "
+        param_formula = format_parameter_equation(model_func.__name__, params)
+        avg_weighted_formula += f"{weight:.4f} * ({param_formula})"
 
-    # Calculate average parameters for each model across samples
-    avg_params = {}
-    for model_name, params_list in all_models_params.items():
-        if params_list and all(p is not None for p in params_list):
-            avg_params[model_name] = np.mean(np.array(params_list), axis=0)
+    avg_weighted_score_L1 = calculate_loss(sample_L1,
+                                           lambda X, *_: weighted_ensemble_model(X, avg_weighted_params),
+                                           [1.0]) / len(sample_L1)
+    avg_weighted_score_L2 = calculate_loss(sample_L2,
+                                           lambda X, *_: weighted_ensemble_model(X, avg_weighted_params),
+                                           [1.0]) / len(sample_L2)
 
-    # Determine the best single model based on average loss
-    best_single_model_name = None
-    best_single_model_avg_loss = float("inf")
+    logging.info(f"Averaged weighted model: {avg_weighted_formula}")
+    logging.info(f"Averaged weighted model score on L1: {avg_weighted_score_L1:.2f}")
+    logging.info(f"Averaged weighted model score on L2: {avg_weighted_score_L2:.2f}")
 
-    for model_name, losses in all_models_losses.items():
-        if model_name != "Weighted Ensemble Model" and losses:  # Exclude ensemble and check if we have losses
-            avg_loss = np.mean(losses)
-            if avg_loss < best_single_model_avg_loss:
-                best_single_model_avg_loss = avg_loss
-                best_single_model_name = model_name
-
-    # Compare the best single model with the ensemble model
-    ensemble_avg_loss = np.mean(all_models_losses["Weighted Ensemble Model"]) if all_models_losses[
-        "Weighted Ensemble Model"] else float("inf")
-
-    # Output results
-    print("\n=== RESULTS ===\n")
-
-    # Print parameters for each model across samples
-    print("=== INDIVIDUAL MODEL PARAMETERS ===")
-    for model_name in all_models_params.keys():
-        if model_name != "Weighted Ensemble Model":
-            print(f"\n{model_name}:")
-
-            for i, params in enumerate(all_models_params[model_name]):
-                if params is not None:
-                    sample_id = f"W{i + 1}" if model_name != "Weighted Ensemble Model" else f"L{i + 1}"
-                    print(f"  Sample {sample_id}: {format_parameter_equation(model_name, params, None)}")
-                    print(f"  Loss: {all_models_losses[model_name][i]:.4f}")
-
-            if model_name in avg_params:
-                print(f"  Average: {format_parameter_equation(model_name, avg_params[model_name], None)}")
-                print(f"  Average Loss: {np.mean(all_models_losses[model_name]):.4f}")
-
-    # Print best single model
-    print("\n=== BEST SINGLE MODEL ===")
-    print(f"Model: {best_single_model_name}")
-    print(f"Average Loss: {best_single_model_avg_loss:.4f}")
-    if best_single_model_name in avg_params:
-        print(
-            f"Parameters: {format_parameter_equation(best_single_model_name, avg_params[best_single_model_name], None)}")
-
-    # Print ensemble model results
-    print("\n=== WEIGHTED ENSEMBLE MODEL ===")
-    for i, params in enumerate(all_models_params["Weighted Ensemble Model"]):
-        if params is not None:
-            print(f"  Sample L{i + 1}: {format_parameter_equation("Weighted Ensemble Model", params, None)}")
-            print(f"  Loss: {all_models_losses["Weighted Ensemble Model"][i]:.4f}")
-
-    if "Weighted Ensemble Model" in avg_params:
-        print(
-            f"  Average: {format_parameter_equation("Weighted Ensemble Model", avg_params["Weighted Ensemble Model"], None)}")
-        print(f"  Average Loss: {ensemble_avg_loss:.4f}")
-
-    # Determine and print the overall best model
-    if ensemble_avg_loss < best_single_model_avg_loss:
-        print("\n=== OVERALL BEST MODEL ===")
-        print("The Weighted Ensemble Model outperforms all individual models.")
-    else:
-        print("\n=== OVERALL BEST MODEL ===")
-        print(f"The best individual model ({best_single_model_name}) outperforms the ensemble.")
-
-    # Save all results to cache
-    result_data = {
-        "individual_models": {},
-        "best_single_model": {
-            "name": best_single_model_name,
-            "avg_loss": best_single_model_avg_loss,
-        },
-        "ensemble_model": {
-            "parameters": [p.tolist() if p is not None else None for p in all_models_params["Weighted Ensemble Model"]],
-            "losses": all_models_losses["Weighted Ensemble Model"],
-            "avg_loss": ensemble_avg_loss if all_models_losses["Weighted Ensemble Model"] else None
-        },
-        "overall_best_model": "Weighted Ensemble Model" if ensemble_avg_loss < best_single_model_avg_loss else best_single_model_name
+    # Store weighted model results
+    results["Weighted Ensemble"] = {
+        "params_L1": weighted_params_L1,
+        "formula_L1": weighted_formula_L1,
+        "score_L1": weighted_score_L1,
+        "params_L2": weighted_params_L2,
+        "formula_L2": weighted_formula_L2,
+        "score_L2": weighted_score_L2,
+        "avg_params": avg_weighted_params,
+        "avg_formula": avg_weighted_formula,
+        "avg_score_L1": avg_weighted_score_L1,
+        "avg_score_L2": avg_weighted_score_L2
     }
 
-    # Add individual model data
-    for model_name in all_models_params.keys():
-        if model_name != "Weighted Ensemble Model":
-            result_data["individual_models"][model_name] = {
-                "parameters": [p.tolist() if p is not None else None for p in all_models_params[model_name]],
-                "losses": all_models_losses[model_name],
-                "avg_parameters": avg_params.get(model_name, None).tolist() if model_name in avg_params else None,
-                "avg_loss": np.mean(all_models_losses[model_name]) if all_models_losses[model_name] else None
-            }
+    # 11. Print summary of results
+    print("\n" + "=" * 80)
+    print("SUMMARY OF RESULTS")
+    print("=" * 80)
 
-    # Add best single model parameters if available
-    if best_single_model_name in avg_params:
-        result_data["best_single_model"]["avg_parameters"] = avg_params[best_single_model_name].tolist()
+    print("\nBest Parameters of Each Model:")
+    print("-" * 80)
+    for model_name in results:
+        if model_name != "Weighted Ensemble":
+            print(f"\n{model_name}:")
+            print(f"  By sample W1: {results[model_name]['formula_W1']} (Score: {results[model_name]['score_W1']:.2f})")
+            print(f"  By sample W2: {results[model_name]['formula_W2']} (Score: {results[model_name]['score_W2']:.2f})")
+            print(f"  Averaged: {results[model_name]['avg_formula']}")
+            print(f"    Score on W1: {results[model_name]['avg_score_W1']:.2f}")
+            print(f"    Score on W2: {results[model_name]['avg_score_W2']:.2f}")
 
-    # Add ensemble model average parameters if available
-    if "Weighted Ensemble Model" in avg_params:
-        result_data["ensemble_model"]["avg_parameters"] = avg_params["Weighted Ensemble Model"].tolist()
+    print("\nBest Single Model:")
+    print("-" * 80)
 
-    cache_manager.save("analysis_results", result_data)
+    # Find best model on W1, W2, and on average
+    best_W1 = min([(model_name, results[model_name]["score_W1"])
+                   for model_name in results if model_name != "Weighted Ensemble"],
+                  key=lambda x: x[1])
+
+    best_W2 = min([(model_name, results[model_name]["score_W2"])
+                   for model_name in results if model_name != "Weighted Ensemble"],
+                  key=lambda x: x[1])
+
+    best_avg = min([(model_name, (results[model_name]["avg_score_W1"] + results[model_name]["avg_score_W2"]) / 2)
+                    for model_name in results if model_name != "Weighted Ensemble"],
+                   key=lambda x: x[1])
+
+    print(f"  Best on W1: {best_W1[0]} (Score: {best_W1[1]:.2f})")
+    print(f"    Formula: {results[best_W1[0]]['formula_W1']}")
+    print(f"\n  Best on W2: {best_W2[0]} (Score: {best_W2[1]:.2f})")
+    print(f"    Formula: {results[best_W2[0]]['formula_W2']}")
+    print(f"\n  Best on average: {best_avg[0]} (Avg Score: {best_avg[1]:.2f})")
+    print(f"    Formula: {results[best_avg[0]]['avg_formula']}")
+
+    print("\nWeighted Ensemble Model:")
+    print("-" * 80)
+    print(f"  By sample L1: \n    {results['Weighted Ensemble']['formula_L1']}")
+    print(f"    Score on L1: {results['Weighted Ensemble']['score_L1']:.2f}")
+    print(f"\n  By sample L2: \n    {results['Weighted Ensemble']['formula_L2']}")
+    print(f"    Score on L2: {results['Weighted Ensemble']['score_L2']:.2f}")
+    print(f"\n  Averaged: \n    {results['Weighted Ensemble']['avg_formula']}")
+    print(f"    Score on L1: {results['Weighted Ensemble']['avg_score_L1']:.2f}")
+    print(f"    Score on L2: {results['Weighted Ensemble']['avg_score_L2']:.2f}")
+
+    print("\nOverall best model:")
+    print("-" * 80)
+    best_model = min([best_W1, best_W2, best_avg], key=lambda x: x[1])
+    print(f"  {best_model[0]} with average score: {best_model[1]:.2f}")
+
+    return results
 
 
 if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Analyze and optimize LP models.")
-    parser.add_argument("--samples", type=int, default=2, help="Number of samples to use for analysis (default: 2)")
-
-    args = parser.parse_args()
-
-    main(num_samples=args.samples)
+    start_time = time.time()
+    logging.info(f"Starting analysis at {time.ctime(start_time)}!")
+    results = analyze_and_compare_models()
+    end_time = time.time()
+    logging.info(f"Analysis completed at {time.ctime(end_time)}!")
+    logging.info(f"Analysis completed in {end_time - start_time:.2f} seconds")

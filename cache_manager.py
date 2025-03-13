@@ -55,5 +55,5 @@ class CacheManager:
                         return cache[key]
             return None
         except Exception as e:
-            logging.error(f"Cache load failed: {e}")
+            logging.warning(f"Cache load failed: {e}")
             return None
