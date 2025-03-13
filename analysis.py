@@ -404,24 +404,26 @@ def analyze_and_compare_models():
         "avg_score_L2": avg_weighted_score_L2
     }
 
-    # 11. Print summary of results
-    print("\n" + "=" * 80)
-    print("SUMMARY OF RESULTS")
-    print("=" * 80)
+    # 11. Log summary of results
+    logging.info("=" * 80)
+    logging.info("SUMMARY OF RESULTS")
+    logging.info("=" * 80)
 
-    print("\nBest Parameters of Each Model:")
-    print("-" * 80)
+    logging.info("\nBest Parameters of Each Model:")
+    logging.info("-" * 80)
     for model_name in results:
         if model_name != "Weighted Ensemble":
-            print(f"\n{model_name}:")
-            print(f"  By sample W1: {results[model_name]['formula_W1']} (Score: {results[model_name]['score_W1']:.2f})")
-            print(f"  By sample W2: {results[model_name]['formula_W2']} (Score: {results[model_name]['score_W2']:.2f})")
-            print(f"  Averaged: {results[model_name]['avg_formula']}")
-            print(f"    Score on W1: {results[model_name]['avg_score_W1']:.2f}")
-            print(f"    Score on W2: {results[model_name]['avg_score_W2']:.2f}")
+            logging.info(f"\n{model_name}:")
+            logging.info(
+                f"  By sample W1: {results[model_name]['formula_W1']} (Score: {results[model_name]['score_W1']:.2f})")
+            logging.info(
+                f"  By sample W2: {results[model_name]['formula_W2']} (Score: {results[model_name]['score_W2']:.2f})")
+            logging.info(f"  Averaged: {results[model_name]['avg_formula']}")
+            logging.info(f"    Score on W1: {results[model_name]['avg_score_W1']:.2f}")
+            logging.info(f"    Score on W2: {results[model_name]['avg_score_W2']:.2f}")
 
-    print("\nBest Single Model:")
-    print("-" * 80)
+    logging.info("\nBest Single Model:")
+    logging.info("-" * 80)
 
     # Find best model on W1, W2, and on average
     best_W1 = min([(model_name, results[model_name]["score_W1"])
@@ -436,31 +438,37 @@ def analyze_and_compare_models():
                     for model_name in results if model_name != "Weighted Ensemble"],
                    key=lambda x: x[1])
 
-    print(f"  Best on W1: {best_W1[0]} (Score: {best_W1[1]:.2f})")
-    print(f"    Formula: {results[best_W1[0]]['formula_W1']}")
-    print(f"\n  Best on W2: {best_W2[0]} (Score: {best_W2[1]:.2f})")
-    print(f"    Formula: {results[best_W2[0]]['formula_W2']}")
-    print(f"\n  Best on average: {best_avg[0]} (Avg Score: {best_avg[1]:.2f})")
-    print(f"    Formula: {results[best_avg[0]]['avg_formula']}")
+    logging.info(f"  Best on W1: {best_W1[0]} (Score: {best_W1[1]:.2f})")
+    logging.info(f"    Formula: {results[best_W1[0]]['formula_W1']}")
+    logging.info(f"\n  Best on W2: {best_W2[0]} (Score: {best_W2[1]:.2f})")
+    logging.info(f"    Formula: {results[best_W2[0]]['formula_W2']}")
+    logging.info(f"\n  Best on average: {best_avg[0]} (Avg Score: {best_avg[1]:.2f})")
+    logging.info(f"    Formula: {results[best_avg[0]]['avg_formula']}")
 
-    print("\nWeighted Ensemble Model:")
-    print("-" * 80)
-    print(f"  By sample L1: \n    {results['Weighted Ensemble']['formula_L1']}")
-    print(f"    Score on L1: {results['Weighted Ensemble']['score_L1']:.2f}")
-    print(f"\n  By sample L2: \n    {results['Weighted Ensemble']['formula_L2']}")
-    print(f"    Score on L2: {results['Weighted Ensemble']['score_L2']:.2f}")
-    print(f"\n  Averaged: \n    {results['Weighted Ensemble']['avg_formula']}")
-    print(f"    Score on L1: {results['Weighted Ensemble']['avg_score_L1']:.2f}")
-    print(f"    Score on L2: {results['Weighted Ensemble']['avg_score_L2']:.2f}")
+    logging.info("\nWeighted Ensemble Model:")
+    logging.info("-" * 80)
+    logging.info(f"  By sample L1: \n    {results['Weighted Ensemble']['formula_L1']}")
+    logging.info(f"    Score on L1: {results['Weighted Ensemble']['score_L1']:.2f}")
+    logging.info(f"\n  By sample L2: \n    {results['Weighted Ensemble']['formula_L2']}")
+    logging.info(f"    Score on L2: {results['Weighted Ensemble']['score_L2']:.2f}")
+    logging.info(f"\n  Averaged: \n    {results['Weighted Ensemble']['avg_formula']}")
+    logging.info(f"    Score on L1: {results['Weighted Ensemble']['avg_score_L1']:.2f}")
+    logging.info(f"    Score on L2: {results['Weighted Ensemble']['avg_score_L2']:.2f}")
 
-    print("\nOverall best model:")
-    print("-" * 80)
-    best_model = min([best_W1, best_W2, best_avg], key=lambda x: x[1])
-    print(f"  {best_model[0]} with average score: {best_model[1]:.2f}")
+    logging.info("\nOverall best model:")
+    logging.info("-" * 80)
+    best_overall = min([(model_name, (results[model_name]["avg_score_W1"] + results[model_name]["avg_score_W2"]) / 2)
+                        for model_name in results if model_name != "Weighted Ensemble"],
+                       key=lambda x: x[1])
+    best_overall = min(best_overall, ('Weighted Ensemble', (
+            results["Weighted Ensemble"]["avg_score_L1"] + results["Weighted Ensemble"]["avg_score_L2"]) / 2),
+                       key=lambda x: x[1])
+
+    logging.info(f"  Best overall: {best_overall[0]} (Avg Score: {best_overall[1]:.2f})")
 
     return results
 
-
+# TODO: Fix average score because it wont be necessary to average the scores of the models
 if __name__ == "__main__":
     start_time = time.time()
     logging.info(f"Starting analysis at {time.ctime(start_time)}!")
