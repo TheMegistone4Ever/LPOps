@@ -3,6 +3,7 @@ import time
 from typing import List, Tuple
 
 import numpy as np
+from numpy.random.mtrand import Sequence
 from scipy.optimize import minimize
 
 from cache_manager import CacheManager
@@ -55,7 +56,8 @@ def format_parameter_equation(model_name: str, params: np.ndarray) -> str:
         return f"Unknown model: {model_name} with params {params}"
 
 
-def generate_sample(sample_name: str, m_range: List[int], n_range: List[int], factor: float = 1.0) -> List[Tuple]:
+def generate_sample(sample_name: str, m_range: Sequence[int], n_range: Sequence[int], num_runs: int,
+                    factor: float = 1.0) -> List[Tuple]:
     """
     Generate a sample of LP problems and record their simplex performance,
     with caching for the simplex method results.
@@ -81,9 +83,8 @@ def generate_sample(sample_name: str, m_range: List[int], n_range: List[int], fa
 
     for m in m_range:
         for n in n_range:
-            num_problems = 3
-            logging.info(f"Generating {num_problems} LP problems with m={m}, n={n}")
-            for problem_index in range(num_problems):
+            logging.info(f"Generating {num_runs} LP problems with m={m}, n={n}")
+            for problem_index in range(num_runs):
                 c, A, b, _ = generate_lp_problem(m, n, factor=factor)
 
                 problem_key = f"simplex_{m}_{n}_{factor}_{problem_index}"
@@ -298,16 +299,17 @@ def analyze_and_compare_models():
         return cached_main_results
 
     # Define the ranges for m (constraints) and n (variables)
-    m_range = [10, 20, 30, 40, 50, 60]
-    n_range = [5, 10, 15, 20, 25, 30]
+    m_range = list(range(200, 2001, 50))
+    n_range = list(range(200, 2001, 50))
+    num_runs = 5
 
     # 1. Generate sample W1 with default factor
     logging.info("Generating sample W1")
-    sample_W1 = generate_sample("W1", m_range, n_range, factor=1.0)
+    sample_W1 = generate_sample("W1", m_range, n_range, num_runs, factor=1.0)
 
     # 2. Generate sample W2 with different factor
     logging.info("Generating sample W2")
-    sample_W2 = generate_sample("W2", m_range, n_range, factor=2.0)
+    sample_W2 = generate_sample("W2", m_range, n_range, num_runs, factor=2.0)
 
     # Define the models to test
     models = [
@@ -376,8 +378,8 @@ def analyze_and_compare_models():
 
     # 6. Generate samples L1 and L2 for weighted model
     logging.info("Generating samples L1 and L2 for weighted model analysis")
-    sample_L1 = generate_sample("L1", m_range, n_range, factor=1.5)
-    sample_L2 = generate_sample("L2", m_range, n_range, factor=2.5)
+    sample_L1 = generate_sample("L1", m_range, n_range, num_runs, factor=1.5)
+    sample_L2 = generate_sample("L2", m_range, n_range, num_runs, factor=2.5)
 
     # 7. Create weighted ensemble model on L1
     logging.info("Creating weighted ensemble model on L1")
