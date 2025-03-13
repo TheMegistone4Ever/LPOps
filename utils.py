@@ -170,7 +170,6 @@ def format_parameter_equation(model_name, params):
         return f"Operations = {params[0]:.6f} × m^{params[1]:.6f} × n^{params[2]:.6f} × log(n)^{params[3]:.6f} + {params[4]:.6f} × m^{params[5]:.6f} × n^{params[6]:.6f}"
     elif model_name == "Weighted Ensemble Model":
         # Generate ensemble equation
-        weight_indices = [0, 2, 5, 7, 9]
         terms = []
 
         # Borgwardt term
