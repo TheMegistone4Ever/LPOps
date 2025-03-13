@@ -2,17 +2,37 @@ import numpy as np
 from scipy.linalg import lu_factor, lu_solve
 
 
-def simplex_method(c, A, b, inversion_threshold=1800 * 1700):
+def simplex_method(c, A, b, inversion_threshold=1800 * 1700, block_size=512):
     """
     Simplex method with a threshold for switching between direct inversion
-    and LU factorization.
+    and LU factorization, plus block processing for large matrices.
+
+    Args:
+        c: Objective function coefficients
+        A: Constraint coefficients matrix
+        b: Right-hand side values
+        inversion_threshold: Threshold for switching between inversion and LU factorization
+        block_size: Size of blocks for processing large matrices
+
+    Returns:
+        Tuple of (solution, objective value, iterations, operation count)
     """
 
     m, n = A.shape
 
     # Add slack variables to convert inequalities to equalities
-    A_slack = np.hstack((A, np.eye(m)))
-    c_slack = np.concatenate((c, np.zeros(m)))
+    # Create A_slack in blocks to save memory
+    A_slack = np.zeros((m, n + m), dtype=A.dtype)
+    A_slack[:, :n] = A
+
+    # Set the identity matrix part in blocks
+    for i in range(0, m, block_size):
+        end_i = min(i + block_size, m)
+        block_height = end_i - i
+        A_slack[i:end_i, n + i:n + end_i] = np.eye(block_height)
+
+    c_slack = np.zeros(n + m)
+    c_slack[:n] = c
 
     # Initial basic feasible solution (BFS)
     basis = list(range(n, n + m))
@@ -26,7 +46,10 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700):
         iterations += 1
 
         # Calculate reduced costs
-        B = A_slack[:, basis]
+        B = np.zeros((m, m), dtype=A.dtype)
+        for j, col_idx in enumerate(basis):
+            B[:, j] = A_slack[:, col_idx]
+
         c_B = c_slack[basis]
 
         try:
@@ -51,11 +74,19 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700):
             print("Singular matrix encountered, problem may be unbounded.")
             return None, None, iterations, flops
 
-        # Matrix-vector multiplication A_slack.T @ y: (n+m)*m flops
-        flops += (n + m) * m
-        # Vector subtraction: (n+m) flops
-        flops += (n + m)
-        reduced_costs = c_slack - A_slack.T @ y
+        # Calculate reduced costs using blocks to avoid large temporary matrices
+        reduced_costs = c_slack.copy()
+
+        # Process A_slack in blocks for the matrix-vector multiplication
+        for i in range(0, n + m, block_size):
+            end_i = min(i + block_size, n + m)
+            block_width = end_i - i
+            # Transposed multiplication for this block: A_slack[:, i:end_i].T @ y
+            block_result = np.zeros(block_width)
+            for j in range(m):
+                block_result += A_slack[j, i:end_i] * y[j]
+            reduced_costs[i:end_i] -= block_result
+            flops += m * block_width  # Count the operations for this block
 
         # Check for optimality - comparisons: (n+m) flops
         flops += (n + m)
@@ -87,15 +118,18 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700):
             b_values = lu_solve((lu, piv), b)
             flops += 2 * m ** 2
 
+        # Calculate A_slack[:, entering] explicitly to save memory
+        entering_col = A_slack[:, entering]
+
         ratios = []
 
         for i in range(m):
-            # Comparison for A_slack[i, entering] > 0: 1 flop
+            # Comparison for entering_col[i] > 0: 1 flop
             flops += 1
-            if A_slack[i, entering] > 0:
+            if entering_col[i] > 0:
                 # Division: 1 flop
                 flops += 1
-                ratios.append(b_values[i] / A_slack[i, entering])
+                ratios.append(b_values[i] / entering_col[i])
             else:
                 ratios.append(float('inf'))
 
@@ -106,8 +140,8 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700):
         # Update basis
         basis[leaving] = entering
 
-        # Update tableau (simplified for this analysis)
-        pivot = A_slack[leaving, entering]
+        # Update tableau using row operations on A_slack
+        pivot = entering_col[leaving]
 
         # Division for normalization: (n+m) flops
         flops += (n + m)
@@ -115,9 +149,10 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700):
 
         for i in range(m):
             if i != leaving:
-                factor = A_slack[i, entering]
-                # Row operation:
-                # - 1 multiplication for the factor
-                # - (n+m) multiplications and (n+m) subtractions for the row update
-                flops += 1 + 2 * (n + m)
-                A_slack[i, :] -= factor * A_slack[leaving, :]
+                factor = entering_col[i]
+                # Process the row update in blocks to save memory
+                for j in range(0, n + m, block_size):
+                    end_j = min(j + block_size, n + m)
+                    # Row operation for this block
+                    A_slack[i, j:end_j] -= factor * A_slack[leaving, j:end_j]
+                    flops += 2 * (end_j - j)  # Each element needs a multiply and subtract
