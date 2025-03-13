@@ -1,10 +1,11 @@
+import collections.abc
 import json
 import logging
 import os
 import tempfile
 from typing import Any, Optional
 
-import numpy as np  # Import numpy here
+import numpy as np
 
 
 def create_key(m: int, n: int, model_type: str) -> str:
@@ -100,8 +101,14 @@ class CacheManager:
 
         if isinstance(data, list):
             # Check if this list *could* have been an ndarray
-            if all(isinstance(item, (int, float)) for item in data) or (data and isinstance(data[0], list) and all(
-                    isinstance(item, (int, float)) for sublist in data for item in sublist)):  # Check for nested lists
+            # AND make sure it's actually iterable before trying to iterate
+            if ((isinstance(data, collections.abc.Iterable)
+                 and all(isinstance(item, (int, float))
+                         for item in data))
+                    or (data and isinstance(data[0], list)
+                        and all(isinstance(item, (int, float))
+                                for sublist in data
+                                for item in sublist))):
                 try:
                     return np.array(data)  # Try converting back to ndarray
                 except (ValueError, TypeError):
