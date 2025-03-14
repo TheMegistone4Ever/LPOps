@@ -1,6 +1,8 @@
+# --- START OF FILE utils.py ---
+
 import os
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Dict, Any
 
 import numpy as np
 from matplotlib import pyplot as plt
@@ -10,12 +12,61 @@ from pandas import DataFrame
 def calculate_loss(data: List[Tuple], model_func: callable, params: np.ndarray) -> float:
     """Calculate a sum of squared errors for a model."""
     X = [(d[0], d[1]) for d in data]
-    y_true = [d[3] for d in data]
+    y_true = [d[2] for d in data]  # Corrected index
     y_pred = [model_func((m, n), *params) for m, n in X]
     return np.sum((np.array(y_true) - np.array(y_pred)) ** 2) / len(data)
 
 
-def create_plots(data: List[Tuple], model_func: callable, model_name: str,
+def extract_plot_data(data: List[Tuple], model_func: callable, params: np.ndarray) -> Dict[str, Any]:
+    """Extracts and organizes data needed for plotting."""
+    df = DataFrame(data, columns=['m', 'n', 'operations'])
+    plot_data = {
+        'm_vals': sorted(df['m'].unique()),
+        'n_vals': sorted(df['n'].unique()),
+        'data_by_m': {},
+        'data_by_n': {},
+        'avg_ops_by_m': {},
+        'avg_ops_by_n': {},
+        'model_fits_m': {},
+        'model_fits_n': {},
+        'm_grid': None,  # Placeholder
+        'n_grid': None,
+        'ops_grid': None,
+        'm_data_3d': None,
+        'n_data_3d': None,
+        'ops_data_3d': None
+    }
+
+    # 2D Plots Data
+    for n in plot_data['n_vals']:
+        subset = df[df['n'] == n]
+        plot_data['data_by_m'][n] = [subset[subset['m'] == m]['operations'].values for m in plot_data['m_vals']]
+        plot_data['avg_ops_by_m'][n] = subset.groupby('m')['operations'].mean().values
+        if params is not None:
+            m_range = np.linspace(min(plot_data['m_vals']), max(plot_data['m_vals']), 100)
+            plot_data['model_fits_m'][n] = (m_range, model_func((m_range, np.full_like(m_range, n)), *params))
+
+    for m in plot_data['m_vals']:
+        subset = df[df['m'] == m]
+        plot_data['data_by_n'][m] = [subset[subset['n'] == n]['operations'].values for n in plot_data['n_vals']]
+        plot_data['avg_ops_by_n'][m] = subset.groupby('n')['operations'].mean().values
+        if params is not None:
+            n_range = np.linspace(min(plot_data['n_vals']), max(plot_data['n_vals']), 100)
+            plot_data['model_fits_n'][m] = (n_range, model_func((np.full_like(n_range, m), n_range), *params))
+
+    # 3D Plots Data
+    if params is not None:
+        df_grouped = df.groupby(['m', 'n'])['operations'].mean().reset_index()
+        plot_data['m_grid'], plot_data['n_grid'] = np.meshgrid(plot_data['m_vals'], plot_data['n_vals'])
+        plot_data['ops_grid'] = model_func((plot_data['m_grid'], plot_data['n_grid']), *params)
+        plot_data['m_data_3d'] = df_grouped['m'].values
+        plot_data['n_data_3d'] = df_grouped['n'].values
+        plot_data['ops_data_3d'] = df_grouped['operations'].values
+
+    return plot_data
+
+
+def create_plots(plot_data: Dict[str, Any], model_func: callable, model_name: str,
                  params: np.ndarray, plot_dir: str = "plots", sample_id: str = ""):
     """Create visualization plots with box plots and connected average lines."""
 
@@ -24,23 +75,16 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
     safe_name = re.sub(r"[\\/*?:'<>|]", "", model_name)
     sample_suffix = f"_{sample_id}" if sample_id else ""
 
-    # Convert data to DataFrame
-    df = DataFrame(data, columns=['m', 'n', 'problem_data', 'operations'])
-
     # Create separate figures for linear and log scales
     for scale in ["linear", "log"]:
         plt.figure(figsize=(30, 20), dpi=200)
 
         # Plot against m
         plt.subplot(1, 2, 1)
-        for n in sorted(df['n'].unique()):
-            subset = df[df['n'] == n]
-            # Create a list of operation counts for each unique 'm'
-            data_to_plot = [subset[subset['m'] == m]['operations'].values for m in sorted(subset['m'].unique())]
-            m_vals = sorted(subset['m'].unique())
-
+        for n in plot_data['n_vals']:
             # Create the box plot
-            bp = plt.boxplot(data_to_plot, positions=m_vals, widths=0.6, patch_artist=True, showfliers=False)
+            bp = plt.boxplot(plot_data['data_by_m'][n], positions=plot_data['m_vals'], widths=0.6,
+                             patch_artist=True, showfliers=False)
 
             # Customize box plot appearance
             for box in bp['boxes']:
@@ -49,13 +93,11 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
                 median.set(color='red', linewidth=2)
 
             # Plot the average line
-            avg_ops = subset.groupby('m')['operations'].mean().values
-            plt.plot(m_vals, avg_ops, 'k-', linewidth=1, alpha=0.7)  # solid line
+            plt.plot(plot_data['m_vals'], plot_data['avg_ops_by_m'][n], 'k-', linewidth=1, alpha=0.7)
 
             if params is not None:
-                m_range = np.linspace(min(m_vals), max(m_vals), 100)
-                plt.plot(m_range, model_func((m_range, np.full_like(m_range, n)), *params),
-                         "--", label=f"Fit n={n}")
+                m_range, model_fit = plot_data['model_fits_m'][n]
+                plt.plot(m_range, model_fit, "--", label=f"Fit n={n}")
 
         plt.xlabel("m")
         plt.ylabel("Operations")
@@ -68,15 +110,11 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
 
         # Plot against n
         plt.subplot(1, 2, 2)
-        for m in sorted(df['m'].unique()):
-            subset = df[df['m'] == m]
-
-            # Create a list of operation counts for each unique 'n'
-            data_to_plot = [subset[subset['n'] == n]['operations'].values for n in sorted(subset['n'].unique())]
-            n_vals = sorted(subset['n'].unique())
+        for m in plot_data['m_vals']:
 
             # Create the box plot
-            bp = plt.boxplot(data_to_plot, positions=n_vals, widths=0.6, patch_artist=True, showfliers=False)
+            bp = plt.boxplot(plot_data['data_by_n'][m], positions=plot_data['n_vals'], widths=0.6,
+                             patch_artist=True, showfliers=False)
 
             # Customize box plot appearance
             for box in bp['boxes']:
@@ -85,14 +123,11 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
                 median.set(color='red', linewidth=2)
 
             # Plot the average line
-            avg_ops = subset.groupby('n')['operations'].mean().values
-            plt.plot(n_vals, avg_ops, 'k-', linewidth=1, alpha=0.7)
+            plt.plot(plot_data['n_vals'], plot_data['avg_ops_by_n'][m], 'k-', linewidth=1, alpha=0.7)
 
             if params is not None:
-                n_range = np.linspace(min(n_vals), max(n_vals), 100)
-                plt.plot(n_range,
-                         model_func((np.full_like(n_range, m), n_range), *params),
-                         "--", label=f"Fit m={m}")
+                n_range, model_fit = plot_data['model_fits_n'][m]
+                plt.plot(n_range, model_fit, "--", label=f"Fit m={m}")
 
         plt.xlabel("n")
         plt.ylabel("Operations")
@@ -108,32 +143,24 @@ def create_plots(data: List[Tuple], model_func: callable, model_name: str,
         plt.savefig(f"{plot_dir}/{safe_name}{sample_suffix}_{scale}_2d.png")
         plt.close()
 
-    # 3D Plots (both scales) -  Keep original 3D plots, just average data
+    # 3D Plots (both scales)
     if params is not None:
-        df_grouped = df.groupby(['m', 'n'])['operations'].mean().reset_index()  # For 3D plot
         for scale in ["linear", "log"]:
-            m_vals = sorted(df_grouped['m'].unique())
-            n_vals = sorted(df_grouped['n'].unique())
-            m_grid, n_grid = np.meshgrid(m_vals, n_vals)
-            ops_grid = model_func((m_grid, n_grid), *params)
-
-            fig = plt.figure(figsize=(30, 20), dpi=200)
-            ax = fig.add_subplot(111, projection="3d")
-
+            ops_grid = plot_data['ops_grid']
             if scale == "log":
                 ops_grid = np.log10(ops_grid)
 
-            surf = ax.plot_surface(m_grid, n_grid, ops_grid, cmap="viridis", alpha=0.7)
+            fig = plt.figure(figsize=(30, 20), dpi=200)
+            ax = fig.add_subplot(111, projection="3d")
+            surf = ax.plot_surface(plot_data['m_grid'], plot_data['n_grid'], ops_grid, cmap="viridis", alpha=0.7)
 
             # Plot actual *averaged* data points
-            m_data = df_grouped['m'].values
-            n_data = df_grouped['n'].values
-            ops_data = df_grouped['operations'].values  # Use the averaged values
-
+            ops_data = plot_data['ops_data_3d']
             if scale == "log":
                 ops_data = np.log10(ops_data)
 
-            ax.scatter(m_data, n_data, ops_data, c="red", marker="o", label="Actual Data (Averaged)")
+            ax.scatter(plot_data['m_data_3d'], plot_data['n_data_3d'], ops_data, c="red", marker="o",
+                       label="Actual Data (Averaged)")
 
             ax.set_xlabel("m")
             ax.set_ylabel("n")

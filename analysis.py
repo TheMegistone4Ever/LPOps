@@ -19,7 +19,7 @@ from models import (
     weighted_ensemble_model
 )
 from simplex import simplex_method
-from utils import create_plots, calculate_loss
+from utils import create_plots, calculate_loss, extract_plot_data
 
 # Setup logging
 logging.basicConfig(
@@ -60,7 +60,8 @@ def generate_sample(sample_name: str, m_range: Sequence[int], n_range: Sequence[
                     factor: float = 1.0) -> List[Tuple]:
     """
     Generate a sample of LP problems and record their simplex performance,
-    with caching for the simplex method results.
+    with caching for the simplex method results.  Saves only the data needed
+    for plotting and analysis.
 
     Args:
         sample_name: Name of the sample for caching
@@ -70,7 +71,7 @@ def generate_sample(sample_name: str, m_range: Sequence[int], n_range: Sequence[
         factor: Scaling factor for problem generation
 
     Returns:
-        List of tuples (m, n, problem_data, operation_count)
+        List of tuples (m, n, operation_count)
     """
     sample_key = f"sample_{sample_name}_f{factor}_{len(m_range)}_{len(n_range)}_{num_runs}"
     cached_data = cache_manager.load(sample_key)
@@ -93,15 +94,15 @@ def generate_sample(sample_name: str, m_range: Sequence[int], n_range: Sequence[
 
                 if cached_solution:
                     logging.info(f"Loaded simplex solution for m={m}, n={n}, problem {problem_index} from cache")
-                    solution, objective, iterations, flops = cached_solution
+                    flops = cached_solution
                 else:
                     logging.info(f"Solving simplex for m={m}, n={n}, problem {problem_index}")
-                    solution, objective, iterations, flops = simplex_method(c, A, b)
+                    _, _, _, flops = simplex_method(c, A, b)  # Only keep flops
                     # Cache the solution for this specific problem
-                    cache_manager.save(problem_key, (solution, objective, iterations, flops))
+                    cache_manager.save(problem_key, flops)
 
-                sample_data.append((m, n, (c, A, b, solution, objective), flops))
-                logging.info(f"Problem solved in {iterations} iterations, {flops} operations")
+                sample_data.append((m, n, flops))
+                logging.info(f"Problem solved, {flops} operations")
 
     cache_manager.save(sample_key, sample_data)
     return sample_data
@@ -145,8 +146,9 @@ def fit_model(model_func, initial_params, sample_data, model_name, sample_name):
     plot_cache_key = f"plot_{model_name}_{sample_name}_{len(sample_data)}"
     if not cache_manager.load(plot_cache_key):
         logging.info(f"Creating and caching plots for {model_name} on {sample_name}")
-        create_plots(sample_data, model_func, model_name, optimal_params, sample_id=sample_name)
-        cache_manager.save(plot_cache_key, "plot_created")  # Just a flag to indicate plot creation
+        plot_data = extract_plot_data(sample_data, model_func, optimal_params)  # Extract needed data
+        create_plots(plot_data, model_func, model_name, optimal_params, sample_id=sample_name)
+        cache_manager.save(plot_cache_key, plot_data)  # Store plot data
     else:
         logging.info(f"Plots for {model_name} on {sample_name} already cached")
 
@@ -242,7 +244,7 @@ def create_weighted_model(models_with_params, sample_data, model_name, sample_na
 
         # Calculate loss
         X = [(d[0], d[1]) for d in sample_data]
-        y_true = [d[3] for d in sample_data]
+        y_true = [d[2] for d in sample_data]
         y_pred = [weighted_ensemble_model((m, n), weighted_params_eval) for m, n in X]
 
         return np.sum((np.array(y_true) - np.array(y_pred)) ** 2)
@@ -270,12 +272,15 @@ def create_weighted_model(models_with_params, sample_data, model_name, sample_na
     plot_cache_key = f"plot_weighted_{model_name}_{sample_name}"
     if not cache_manager.load(plot_cache_key):
         logging.info(f"Creating and caching plots for weighted {model_name} on {sample_name}")
-        create_plots(sample_data,
+        # Extract the necessary plot data
+        plot_data = extract_plot_data(sample_data, lambda X, *_: weighted_ensemble_model(X, weighted_params),
+                                      np.array([1.0]))
+        create_plots(plot_data,
                      lambda X, *_: weighted_ensemble_model(X, weighted_params),
                      model_name,
                      np.array([1.0]),  # Dummy parameter
                      sample_id=sample_name)
-        cache_manager.save(plot_cache_key, "plot_created")  # Flag
+        cache_manager.save(plot_cache_key, plot_data)  # Cache the plot data
     else:
         logging.info(f"Plots for weighted {model_name} on {sample_name} already cached")
 
