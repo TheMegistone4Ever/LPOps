@@ -54,14 +54,11 @@ class CacheManager:
         """Save data to a separate file using """
 
         try:
-            # Use the key directly for file name instead of hashing
             file_path = path.join(self.cache_dir, f"{key}.pkl")
 
-            # Add key to the set
             self.key_map.add(key)
             self._save_key_map()
 
-            # Serialize using pickle
             with NamedTemporaryFile(mode="wb", dir=self.cache_dir, delete=False) as temp_file:
                 dump(data, temp_file)
                 temp_file_name = temp_file.name
@@ -81,7 +78,6 @@ class CacheManager:
         """Load data from a file using """
 
         try:
-            # Check if key exists in a set
             if key not in self.key_map:
                 return None
 

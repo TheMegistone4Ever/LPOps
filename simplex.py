@@ -1,4 +1,5 @@
-import numpy as np
+from numpy import zeros, eye, argmax, argmin
+from numpy.linalg import inv, LinAlgError
 from scipy.linalg import lu_factor, lu_solve
 
 
@@ -22,16 +23,16 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700, block_size=512):
 
     # Add slack variables to convert inequalities to equalities
     # Create A_slack in blocks to save memory
-    A_slack = np.zeros((m, n + m), dtype=A.dtype)
+    A_slack = zeros((m, n + m), dtype=A.dtype)
     A_slack[:, :n] = A
 
     # Set the identity matrix part in blocks
     for i in range(0, m, block_size):
         end_i = min(i + block_size, m)
         block_height = end_i - i
-        A_slack[i:end_i, n + i:n + end_i] = np.eye(block_height)
+        A_slack[i:end_i, n + i:n + end_i] = eye(block_height)
 
-    c_slack = np.zeros(n + m)
+    c_slack = zeros(n + m)
     c_slack[:n] = c
 
     # Initial basic feasible solution (BFS)
@@ -46,7 +47,7 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700, block_size=512):
         iterations += 1
 
         # Calculate reduced costs
-        B = np.zeros((m, m), dtype=A.dtype)
+        B = zeros((m, m), dtype=A.dtype)
         for j, col_idx in enumerate(basis):
             B[:, j] = A_slack[:, col_idx]
 
@@ -57,7 +58,7 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700, block_size=512):
                 # Use direct inverse for smaller matrices
                 # Matrix inversion via Gaussian elimination: ~(2/3)m³ flops
                 flops += int((2 / 3) * m ** 3)
-                B_inv = np.linalg.inv(B)
+                B_inv = inv(B)
                 # Matrix-vector multiplication: B_inv.T @ c_B
                 flops += m ** 2
                 y = B_inv.T @ c_B
@@ -70,7 +71,7 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700, block_size=512):
                 # Solve B.T @ y = c_B ~ 2m² flops
                 flops += 2 * m ** 2
 
-        except np.linalg.LinAlgError:
+        except LinAlgError:
             print("Singular matrix encountered, problem may be unbounded.")
             return None, None, iterations, flops
 
@@ -82,7 +83,7 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700, block_size=512):
             end_i = min(i + block_size, n + m)
             block_width = end_i - i
             # Transposed multiplication for this block: A_slack[:, i:end_i].T @ y
-            block_result = np.zeros(block_width)
+            block_result = zeros(block_width)
             for j in range(m):
                 block_result += A_slack[j, i:end_i] * y[j]
             reduced_costs[i:end_i] -= block_result
@@ -91,7 +92,7 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700, block_size=512):
         # Check for optimality - comparisons: (n+m) flops
         flops += (n + m)
         if all(rc <= 0 for rc in reduced_costs):
-            x = np.zeros(n + m)
+            x = zeros(n + m)
             if is_small:
                 # Matrix-vector multiplication B_inv @ b: m² flops
                 flops += m ** 2
@@ -106,7 +107,7 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700, block_size=512):
 
         # Select entering variable - finding max: (n+m-1) comparisons
         flops += (n + m - 1)
-        entering = np.argmax(reduced_costs)
+        entering = argmax(reduced_costs)
 
         # Minimum ratio test (consistent with inversion method)
         if is_small:
@@ -121,7 +122,7 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700, block_size=512):
         # Calculate A_slack[:, entering] explicitly to save memory
         entering_col = A_slack[:, entering]
 
-        ratios = []
+        ratios = list()
 
         for i in range(m):
             # Comparison for entering_col[i] > 0: 1 flop
@@ -131,11 +132,11 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700, block_size=512):
                 flops += 1
                 ratios.append(b_values[i] / entering_col[i])
             else:
-                ratios.append(float('inf'))
+                ratios.append(float("inf"))
 
         # Finding minimum: (m-1) comparisons
         flops += (m - 1)
-        leaving = np.argmin(ratios)
+        leaving = argmin(ratios)
 
         # Update basis
         basis[leaving] = entering
@@ -155,4 +156,4 @@ def simplex_method(c, A, b, inversion_threshold=1800 * 1700, block_size=512):
                     end_j = min(j + block_size, n + m)
                     # Row operation for this block
                     A_slack[i, j:end_j] -= factor * A_slack[leaving, j:end_j]
-                    flops += 2 * (end_j - j)  # Each element needs a multiply and subtract
+                    flops += 2 * (end_j - j)  # Each element needs a multiplication and a subtraction

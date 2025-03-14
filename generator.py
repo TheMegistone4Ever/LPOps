@@ -1,4 +1,4 @@
-import numpy as np
+from numpy import zeros, float32
 from numpy.random import rand
 
 
@@ -18,10 +18,10 @@ def generate_lp_problem(m, n, factor=1, block_size=512):
     """
 
     # Generate a random solution vector x with positive values
-    x = rand(n) * factor + 0.1  # Ensure positivity
+    x = rand(n) * factor + 0.1
 
     # Generate a random constraint matrix A in blocks
-    A = np.zeros((m, n), dtype=np.float32)
+    A = zeros((m, n), dtype=float32)
     for i in range(0, m, block_size):
         i_end = min(i + block_size, m)
         for j in range(0, n, block_size):
@@ -30,7 +30,7 @@ def generate_lp_problem(m, n, factor=1, block_size=512):
 
     # Calculate b to ensure feasibility (Ax <= b)
     # Calculate Ax in blocks to avoid memory issues
-    Ax = np.zeros(m)
+    Ax = zeros(m)
     for i in range(0, m, block_size):
         i_end = min(i + block_size, m)
         for j in range(0, n, block_size):

@@ -4,7 +4,7 @@ from numpy import ndarray, log, where, sum as np_sum
 
 
 def borgwardt_model(X: Tuple[ndarray, ndarray], a: float) -> ndarray:
-    """Borgwardt's Model: O(m^2 * n^(1/(m-1))) -> O(m^3 * n) when m scales with n."""
+    """Borgwardt's Model: O(a * m^2 * n^(1/(m-1))) -> O(a * m^3 * n) when m scales with n."""
 
     m, n = X
     return a * m ** 3 * n
@@ -18,28 +18,28 @@ def smoothed_analysis_model(X: Tuple[ndarray, ndarray], a: float, b: float) -> n
 
 
 def adler_megiddo_model(X: Tuple[ndarray, ndarray], a: float) -> ndarray:
-    """Adler-Megiddo Model: O(n^4)."""
+    """Adler-Megiddo Model: O(a * n^4)."""
 
     m, n = X
     return a * n ** 4
 
 
 def refined_borgwardt_model(X: Tuple[ndarray, ndarray], a: float) -> ndarray:
-    """Refined bound: O(m^3n^2)."""
+    """Refined bound: O(a * m^3 * n^2)."""
 
     m, n = X
     return a * m ** 3 * n ** 2
 
 
 def general_model(X: Tuple[ndarray, ndarray], a: float, b: float, c: float) -> ndarray:
-    """General model O(m^a n^b)."""
+    """General model O(a * m^b * n^c)."""
 
     m, n = X
     return a * m ** b * n ** c
 
 
 def general_model_log(X: Tuple[ndarray, ndarray], a: float, b: float, c: float, d: float) -> ndarray:
-    """General model with log terms: O(m^a * n^b * log(n)^c)."""
+    """General model with log terms: O(a * m^b * n^c * log(n)^d)."""
 
     m, n = X
     log_n = where(n > 1, log(n), 0)
@@ -48,7 +48,7 @@ def general_model_log(X: Tuple[ndarray, ndarray], a: float, b: float, c: float, 
 
 def general_model_mixed(X: Tuple[ndarray, ndarray], a: float, b: float, c: float, d: float, e: float,
                         f: float, g: float) -> ndarray:
-    """General model with mixed terms: O(m^a * n^b * log(n)^c + d * m^e * n^f)."""
+    """General model with mixed terms: O(a * m^b * n^c * log(n)^d + e * m^f * n^g)."""
 
     m, n = X
     log_n = where(n > 1, log(n), 0)
