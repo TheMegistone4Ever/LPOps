@@ -122,10 +122,8 @@ def fit_model(model_func, initial_params, sample_data, model_name, sample_name):
 
     logging.info(f"Fitting {model_name} to sample {sample_name}")
 
-    def loss_func(params):
-        return calculate_loss(sample_data, model_func, params)
-
-    result = minimize(loss_func, initial_params, method="Nelder-Mead")
+    result = minimize(lambda params: calculate_loss(sample_data, model_func, params), initial_params,
+                      method="Nelder-Mead")
     optimal_params = result.x
 
     formula = format_parameter_equation(model_func.__name__, optimal_params)
@@ -218,18 +216,21 @@ def create_weighted_model(models_with_params, sample_data, model_name, sample_na
     initial_weights = array([weight for _, weight, _ in models_with_params])
     initial_weights = initial_weights / np_sum(initial_weights)
 
-    def loss_func(weights):
-
-        normalized_weights = weights / np_sum(weights)
-
-        weighted_params_eval = [(model_func, normalized_weights[i], params)
-                                for i, (model_func, _, params) in enumerate(models_with_params)]
-
-        return calculate_loss(sample_data, lambda X, *_: weighted_ensemble_model(X, weighted_params_eval), array([1.0]))
-
     bounds = [(0.001, None) for _ in range(len(initial_weights))]
 
-    result = minimize(loss_func, initial_weights, method="L-BFGS-B", bounds=bounds)
+    result = minimize(
+        lambda weights: calculate_loss(
+            sample_data,
+            lambda X, *_: weighted_ensemble_model(
+                X,
+                [(model_func, (weights / np_sum(weights))[i], params)
+                 for i, (model_func, _, params) in enumerate(models_with_params)]
+            ),
+            array([1.0])
+        ),
+        initial_weights, method="L-BFGS-B", bounds=bounds
+    )
+
     optimal_weights = result.x / np_sum(result.x)
 
     weighted_params = [(model_func, optimal_weights[i], params)
@@ -326,13 +327,13 @@ def analyze_and_compare_models():
         logging.info(f"Averaged {model_name} Score on W2: {avg_score_W2:.2f}")
 
         results[model_name] = {
-            "params_W1": params_W1.tolist(),
+            "params_W1": params_W1,
             "formula_W1": formula_W1,
             "score_W1": score_W1,
-            "params_W2": params_W2.tolist(),
+            "params_W2": params_W2,
             "formula_W2": formula_W2,
             "score_W2": score_W2,
-            "avg_params": avg_params.tolist(),
+            "avg_params": avg_params,
             "avg_formula": avg_formula,
             "avg_score_W1": avg_score_W1,
             "avg_score_W2": avg_score_W2,

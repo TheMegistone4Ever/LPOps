@@ -1,4 +1,4 @@
-from typing import Tuple, Callable, Sequence
+from typing import Tuple, Callable, List
 
 from numpy import ndarray, log, where, sum as np_sum
 
@@ -56,7 +56,7 @@ def general_model_mixed(X: Tuple[ndarray, ndarray], a: float, b: float, c: float
 
 
 def weighted_ensemble_model(X: Tuple[ndarray, ndarray],
-                            params_tuple: Sequence[Tuple[Callable[..., ndarray], float, Sequence[float]]]) -> ndarray:
+                            params_tuple: List[Tuple[Callable[..., ndarray], float, List[float]]]) -> ndarray:
     """Weighted ensemble model: O(sum_i(w_i * f_i(X, *params)))."""
 
     return np_sum([weight * model(X, *params) for model, weight, params in params_tuple], axis=0)

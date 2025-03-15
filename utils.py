@@ -3,17 +3,17 @@ from re import sub
 from typing import List, Tuple, Dict, Any
 
 from matplotlib import pyplot as plt
-from numpy import ndarray, array, linspace, full_like, meshgrid, log10
+from numpy import ndarray, array, sum as np_sum, linspace, full_like, meshgrid, log10
 from pandas import DataFrame
 
 
 def calculate_loss(data: List[Tuple], model_func: callable, params: ndarray) -> float:
-    """Calculate a sum of squared errors for a model."""
+    """Calculate the mean squared error (MSE) loss for the given model and parameters."""
 
     X = [(d[0], d[1]) for d in data]
-    y_true = [d[2] for d in data]  # Corrected index
+    y_true = [d[2] for d in data]
     y_pred = [model_func((m, n), *params) for m, n in X]
-    return sum((array(y_true) - array(y_pred)) ** 2) / len(data)
+    return np_sum((array(y_true) - array(y_pred)) ** 2) / len(data)
 
 
 def extract_plot_data(data: List[Tuple], model_func: callable, params: ndarray) -> Dict[str, Any]:
