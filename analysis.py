@@ -204,7 +204,7 @@ def create_weighted_model(models_with_params, sample_data, model_name, sample_na
         Tuple of (optimal weights and params, formula string)
     """
 
-    cache_key = f"weighted_{model_name}_{sample_name}"
+    cache_key = f"fit_weighted_{model_name}_{sample_name}_{len(sample_data)}"
     cached_result = cache_manager.load(cache_key)
 
     if cached_result:
@@ -219,16 +219,13 @@ def create_weighted_model(models_with_params, sample_data, model_name, sample_na
     initial_weights = initial_weights / np_sum(initial_weights)
 
     def loss_func(weights):
+
         normalized_weights = weights / np_sum(weights)
 
         weighted_params_eval = [(model_func, normalized_weights[i], params)
                                 for i, (model_func, _, params) in enumerate(models_with_params)]
 
-        X = [(d[0], d[1]) for d in sample_data]
-        y_true = [d[2] for d in sample_data]
-        y_pred = [weighted_ensemble_model((m, n), weighted_params_eval) for m, n in X]
-
-        return np_sum((array(y_true) - array(y_pred)) ** 2)
+        return calculate_loss(sample_data, lambda X, *_: weighted_ensemble_model(X, weighted_params_eval), array([1.0]))
 
     bounds = [(0.001, None) for _ in range(len(initial_weights))]
 
@@ -260,7 +257,7 @@ def create_weighted_model(models_with_params, sample_data, model_name, sample_na
 
     result_data = {
         "params": [(w, p.tolist()) for (_, w, p) in weighted_params],
-        "formula": formula
+        "formula": formula,
     }
     cache_manager.save(cache_key, result_data)
 
@@ -294,7 +291,7 @@ def analyze_and_compare_models():
         ("Refined Borgwardt", refined_borgwardt_model, [1.0]),
         ("General", general_model, [1.0, 1.0, 1.0]),
         ("General Log", general_model_log, [1.0, 1.0, 1.0, 1.0]),
-        ("General Mixed", general_model_mixed, [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+        ("General Mixed", general_model_mixed, [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
     ]
 
     results = dict()
@@ -338,7 +335,7 @@ def analyze_and_compare_models():
             "avg_params": avg_params.tolist(),
             "avg_formula": avg_formula,
             "avg_score_W1": avg_score_W1,
-            "avg_score_W2": avg_score_W2
+            "avg_score_W2": avg_score_W2,
         }
 
     logging.info(f"Best single model on W1: {best_model_name_W1}")
