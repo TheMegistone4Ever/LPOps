@@ -94,13 +94,17 @@ operations. $X$ represents the input tuple $(m, n)$.
 #### 2.2.1 Borgwardt's Model
 
 Based on Borgwardt's analysis of the average number of pivot steps, a common interpretation for total operations is:
-$$ \text{Ops}(m,n) = a \cdot m^3 \cdot n $$
+
+$$
+\text{Ops}(m,n) = a \cdot m^3 \cdot n
+$$
 
 * `borgwardt_model(X, a)`
 
 #### 2.2.2 Smoothed Analysis Model
 
 Derived from Spielman and Teng's smoothed analysis:
+
 $$ \text{Ops}(m,n) = a \cdot m \cdot n^5 \cdot (\ln n)^b $$
 
 * `smoothed_analysis_model(X, a, b)`
