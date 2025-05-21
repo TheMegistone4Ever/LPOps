@@ -105,35 +105,49 @@ $$
 
 Derived from Spielman and Teng's smoothed analysis:
 
-$$ \text{Ops}(m,n) = a \cdot m \cdot n^5 \cdot (\ln n)^b $$
+$$
+\text{Ops}(m,n) = a \cdot m \cdot n^5 \cdot (\ln n)^b
+$$
 
 * `smoothed_analysis_model(X, a, b)`
 
 #### 2.2.3 Adler-Megiddo Model
 
 Suggests a polynomial bound, often simplified for operations as:
-$$ \text{Ops}(m,n) = a \cdot n^4 $$
+
+$$
+\text{Ops}(m,n) = a \cdot n^4
+$$
 
 * `adler_megiddo_model(X, a)`
 
 #### 2.2.4 Refined Borgwardt Model
 
 A variation or refinement of Borgwardt's model:
-$$ \text{Ops}(m,n) = a \cdot m^3 \cdot n^2 $$
+
+$$
+\text{Ops}(m,n) = a \cdot m^3 \cdot n^2
+$$
 
 * `refined_borgwardt_model(X, a)`
 
 #### 2.2.5 General Polynomial Model
 
 A flexible polynomial form:
-$$ \text{Ops}(m,n) = a \cdot m^b \cdot n^c $$
+
+$$
+\text{Ops}(m,n) = a \cdot m^b \cdot n^c
+$$
 
 * `general_model(X, a, b, c)`
 
 #### 2.2.6 General Polynomial Model with Logarithmic Term
 
 Extends the general model to include a logarithmic dependency on $n$:
-$$ \text{Ops}(m,n) = a \cdot m^b \cdot n^c \cdot (\ln n)^d $$
+
+$$
+\text{Ops}(m,n) = a \cdot m^b \cdot n^c \cdot (\ln n)^d
+$$
 
 * `general_model_log(X, a, b, c, d)`
 
@@ -141,14 +155,20 @@ $$ \text{Ops}(m,n) = a \cdot m^b \cdot n^c \cdot (\ln n)^d $$
 
 A more complex model combining two polynomial-logarithmic terms, found to be effective in capturing observed
 complexities:
-$$ \text{Ops}(m,n) = a \cdot m^b \cdot n^c \cdot (\ln n)^d + e \cdot m^f \cdot n^g $$
+
+$$
+\text{Ops}(m,n) = a \cdot m^b \cdot n^c \cdot (\ln n)^d + e \cdot m^f \cdot n^g
+$$
 
 * `general_model_mixed(X, a, b, c, d, e, f, g)`
 
 #### 2.2.8 Weighted Ensemble Model
 
 Combines predictions from multiple base models using learned weights:
-$$ \text{Ops}(m,n) = \sum_{k} (\text{weight}_k \cdot \text{model}_k(X, \text{params}_k)) $$
+
+$$
+\text{Ops}(m,n) = \sum_{k} (\text{weight}_k \cdot \text{model}_k(X, \text{params}_k))
+$$
 
 * `weighted_ensemble_model(X, list_of_model_tuples)`
   where each tuple is `(model_function, weight, model_parameters)`.
