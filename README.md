@@ -217,7 +217,7 @@ mentioned, assumes initial BFS from slack variables). Key features:
 * **Data Generation**: The `analysis.py` script generates multiple datasets (samples W1, W2, L1, L2) by varying the
   `factor` in `generate_lp_problem`.
 * **Caching**: `cache_manager.py:CacheManager` is used extensively to store and retrieve:
-    * Generated sample data (tuples of $m, n, \text{operation_count}$).
+    * Generated sample data (tuples of $m, n, \text{operation-count}$).
     * Results of individual simplex method runs.
     * Fitted model parameters.
     * Data extracted for plotting.
@@ -230,7 +230,7 @@ mentioned, assumes initial BFS from slack variables). Key features:
 * **Parameter Optimization**: `scipy.optimize.minimize` (with the "Nelder-Mead" method) is used in
   `analysis.py:fit_model` to find the optimal parameters for each complexity model by minimizing the MSE loss.
 * **Model Comparison**:
-    * Models are trained on one sample (e.g., W1) and parameters are recorded.
+    * Models are trained on one sample (e.g., W1), and parameters are recorded.
     * These parameters can be used as initial guesses for fitting on another sample (e.g., W2) or parameters from W1 and
       W2 fits are averaged.
     * Models are evaluated based on their MSE scores on various datasets.
