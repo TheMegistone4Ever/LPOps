@@ -694,6 +694,8 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
     metrics_best_mse: List[float] = list()
     metrics_elapsed: List[float] = list()
 
+    total_combinations = sum(math.comb(n_features, k) for k in range(1, n_features + 1))
+    log.info("Total combinations to evaluate: %d", total_combinations)
     for k in range(1, n_features + 1):
         t_k_start = time.perf_counter()
         comb_gen = combinations(range(n_features), k)
