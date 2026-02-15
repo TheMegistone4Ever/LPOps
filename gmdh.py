@@ -228,8 +228,8 @@ def solve_batch_torch(
     solver_used = None
 
     try:
-        L = torch.linalg.cholesky(a_batch)
-        weights = torch.cholesky_solve(b_batch, L)
+        cholesky = torch.linalg.cholesky(a_batch)
+        weights = torch.cholesky_solve(b_batch, cholesky)
         solver_used = "cholesky"
     except RuntimeError:
         pass
