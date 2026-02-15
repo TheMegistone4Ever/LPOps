@@ -253,7 +253,6 @@ def solve_batch_torch(
         weights = torch.bmm(a_pinv, b_batch)
         solver_used = "pinv"
 
-    # Log if we had to fall back to pseudoinverse (indicates potential issues)
     if solver_used == "pinv":
         log.debug(f"Using pseudoinverse for batch (feature combination may be rank-deficient)")
 
