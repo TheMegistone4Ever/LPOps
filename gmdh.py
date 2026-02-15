@@ -93,10 +93,6 @@ BASIS_FUNCTIONS = {
     "poly_mn": _f_poly_mn,
     "general": _f_general,
     "adler_megiddo": _f_adler_megiddo,
-    "log_n": lambda m, n: _safe_log(n),
-    "log_m": lambda m, n: _safe_log(m),
-    "n": lambda m, n: n,
-    "m": lambda m, n: m,
 }
 
 
@@ -228,10 +224,38 @@ def solve_batch_torch(
 
     b_batch = xt_y[idx_tensor]
 
+    weights = None
+    solver_used = None
+
     try:
-        weights = torch.linalg.solve(a_batch, b_batch)
+        L = torch.linalg.cholesky(a_batch)
+        weights = torch.cholesky_solve(b_batch, L)
+        solver_used = "cholesky"
     except RuntimeError:
-        weights = torch.linalg.lstsq(a_batch, b_batch).solution
+        pass
+
+    if weights is None:
+        try:
+            weights = torch.linalg.solve(a_batch, b_batch)
+            solver_used = "solve"
+        except RuntimeError:
+            pass
+
+    if weights is None:
+        try:
+            weights = torch.linalg.lstsq(a_batch, b_batch, rcond=1e-4).solution
+            solver_used = "lstsq"
+        except RuntimeError:
+            pass
+
+    if weights is None:
+        a_pinv = torch.linalg.pinv(a_batch, rcond=1e-6)
+        weights = torch.bmm(a_pinv, b_batch)
+        solver_used = "pinv"
+
+    # Log if we had to fall back to pseudoinverse (indicates potential issues)
+    if solver_used == "pinv":
+        log.debug(f"Using pseudoinverse for batch (feature combination may be rank-deficient)")
 
     x_test_sub = x_test_t[idx_tensor].permute(0, 2, 1)
     y_pred = torch.bmm(x_test_sub, weights).squeeze(2)
