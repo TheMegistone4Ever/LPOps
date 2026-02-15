@@ -1,5 +1,5 @@
 # User-defined directories and files
-plots/
+plots*/
 cache/
 
 # Byte-compiled / optimized / DLL files
