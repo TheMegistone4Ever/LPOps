@@ -22,6 +22,7 @@ from tqdm import tqdm
 warnings.filterwarnings("ignore")
 
 CACHE_DIR = "cache"
+GMDH_CACHE_DIR = "gmdh_cache"
 PLOTS_DIR = "plots_combi"
 LOG_FILE = "gmdh_execution.log"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -29,6 +30,7 @@ DTYPE = torch.float64
 BATCH_SIZE_INITIAL = 4096
 
 os.makedirs(PLOTS_DIR, exist_ok=True)
+os.makedirs(GMDH_CACHE_DIR, exist_ok=True)
 
 if torch.cuda.is_available():
     os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
@@ -259,7 +261,7 @@ def solve_batch_torch(
         solver_used = "pinv"
 
     if solver_used == "pinv":
-        log.debug(f"Using pseudoinverse for batch (feature combination may be rank-deficient)")
+        log.debug("Using pseudoinverse for batch (feature combination may be rank-deficient)")
 
     x_test_sub = x_test_t[idx_tensor].permute(0, 2, 1)
     y_pred = torch.bmm(x_test_sub, weights).squeeze(2)
@@ -267,7 +269,12 @@ def solve_batch_torch(
     diff = y_pred.sub(y_test.unsqueeze(0))
     mse_batch = torch.mean(diff.pow(2), dim=1)
 
-    return mse_batch.cpu().numpy(), weights
+    mse_cpu = mse_batch.cpu().numpy()
+    weights_cpu = weights.cpu()
+
+    del a_batch, b_batch, identity, x_test_sub, y_pred, diff, mse_batch, weights
+
+    return mse_cpu, weights_cpu
 
 
 def perform_coefficient_clustering(
@@ -652,6 +659,84 @@ def create_plots(
             plt.close(fig)
 
 
+def _gmdh_cache_path(k: int) -> str:
+    return os.path.join(GMDH_CACHE_DIR, f"k_{k:03d}.pkl")
+
+
+def _gmdh_global_cache_path() -> str:
+    return os.path.join(GMDH_CACHE_DIR, "global_state.pkl")
+
+
+def _save_k_cache(
+        k: int,
+        k_best_mse: float,
+        k_best_indices: Any,
+        k_best_weights: Any,
+        speed: float,
+        elapsed: float,
+        total_combs: int,
+) -> None:
+    payload = {
+        "k": k,
+        "k_best_mse": k_best_mse,
+        "k_best_indices": k_best_indices,
+        "k_best_weights": k_best_weights,
+        "speed": speed,
+        "elapsed": elapsed,
+        "total_combs": total_combs,
+    }
+    with open(_gmdh_cache_path(k), "wb") as fh:
+        pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def _load_k_cache(k: int) -> Dict[str, Any] | None:
+    path = _gmdh_cache_path(k)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "rb") as fh:
+            return pickle.load(fh)
+    except (pickle.UnpicklingError, EOFError, Exception):
+        return None
+
+
+def _save_global_state(
+        best_combined_mse: float,
+        best_indices: Any,
+        best_weights: Any,
+        mse_history: List[float],
+        metrics_k: List[int],
+        metrics_combs: List[int],
+        metrics_speed: List[float],
+        metrics_best_mse: List[float],
+        metrics_elapsed: List[float],
+) -> None:
+    payload = {
+        "best_combined_mse": best_combined_mse,
+        "best_indices": best_indices,
+        "best_weights": best_weights,
+        "mse_history": mse_history,
+        "metrics_k": metrics_k,
+        "metrics_combs": metrics_combs,
+        "metrics_speed": metrics_speed,
+        "metrics_best_mse": metrics_best_mse,
+        "metrics_elapsed": metrics_elapsed,
+    }
+    with open(_gmdh_global_cache_path(), "wb") as fh:
+        pickle.dump(payload, fh, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def _load_global_state() -> Dict[str, Any] | None:
+    path = _gmdh_global_cache_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "rb") as fh:
+            return pickle.load(fh)
+    except (pickle.UnpicklingError, EOFError, Exception):
+        return None
+
+
 def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
     t_total_start = time.perf_counter()
     log.info("GMDH initialisation (raw data, no normalisation)")
@@ -690,6 +775,7 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
 
     best_combined_mse = float("inf")
     best_indices = None
+    best_weights_global = None
     mse_history: List[float] = list()
 
     metrics_k: List[int] = list()
@@ -698,70 +784,122 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
     metrics_best_mse: List[float] = list()
     metrics_elapsed: List[float] = list()
 
+    cached_k_set: set = set()
+    global_state = _load_global_state()
+    if global_state is not None:
+        best_combined_mse = global_state["best_combined_mse"]
+        best_indices = global_state["best_indices"]
+        best_weights_global = global_state.get("best_weights", None)
+        mse_history = global_state["mse_history"]
+        metrics_k = global_state["metrics_k"]
+        metrics_combs = global_state["metrics_combs"]
+        metrics_speed = global_state["metrics_speed"]
+        metrics_best_mse = global_state["metrics_best_mse"]
+        metrics_elapsed = global_state["metrics_elapsed"]
+        cached_k_set = set(metrics_k)
+        log.info(
+            "Restored global state: %d k-levels done, best MSE=%.6e",
+            len(cached_k_set),
+            best_combined_mse,
+        )
+
     total_combinations = sum(math.comb(n_features, k) for k in range(1, n_features + 1))
     log.info("Total combinations to evaluate: %d", total_combinations)
+
     for k in range(1, n_features + 1):
+        if k in cached_k_set:
+            log.info("k=%d: found in cache, skipping", k)
+            continue
+
         t_k_start = time.perf_counter()
-        comb_gen = combinations(range(n_features), k)
         total_combs = math.comb(n_features, k)
         current_batch_size = BATCH_SIZE_INITIAL
         k_best_mse = float("inf")
+        k_best_indices = None
+        k_best_weights = None
         processed_count = 0
 
         log.info("k=%d: %d combinations", k, total_combs)
 
         with tqdm(total=total_combs, desc=f"k={k}", ncols=100) as pbar:
-            async_loader = AsyncGPULoader(
-                _batched(comb_gen, current_batch_size), DEVICE
-            )
-
             while True:
-                try:
+                comb_gen = combinations(range(n_features), k)
+                if processed_count > 0:
+                    comb_gen = islice(comb_gen, processed_count, None)
+
+                batched_iter = _batched(comb_gen, current_batch_size)
+
+                if DEVICE.type == "cuda":
+                    async_loader = AsyncGPULoader(batched_iter, DEVICE)
+                    loader_iter = async_loader
+                else:
+                    loader_iter = (
+                        (batch_cpu, torch.tensor(batch_cpu, dtype=torch.long, device=DEVICE))
+                        for batch_cpu in batched_iter
+                    )
+
+                oom_occurred = False
+
+                for batch_cpu, batch_gpu in loader_iter:
                     try:
-                        batch_cpu, batch_gpu = next(async_loader)
-                    except StopIteration:
+                        mse1, w1 = solve_batch_torch(
+                            batch_gpu, xt_x_1, xt_y_1, x_te1_t, y_te1, .1
+                        )
+                        mse2, _ = solve_batch_torch(
+                            batch_gpu, xt_x_2, xt_y_2, x_te2_t, y_te2, .1
+                        )
+
+                        total_mse = mse1 + mse2
+                        min_idx = np.argmin(total_mse)
+                        min_val = total_mse[min_idx]
+
+                        if min_val < k_best_mse:
+                            k_best_mse = float(min_val)
+                            k_best_indices = list(batch_cpu[min_idx])
+                            k_best_weights = w1[min_idx].flatten().numpy()
+
+                        if min_val < best_combined_mse:
+                            best_combined_mse = float(min_val)
+                            best_indices = list(batch_cpu[min_idx])
+                            best_weights_global = w1[min_idx].flatten().numpy()
+
+                            formula = " + ".join(
+                                f"{w:+.4e}*{feature_names[i]}"
+                                for w, i in zip(best_weights_global, best_indices)
+                            )
+                            pbar.set_postfix({"BestMSE": f"{best_combined_mse:.2e}"})
+                            log.debug("New best: %s", formula)
+
+                        mse_history.append(float(min_val))
+                        processed_count += len(batch_cpu)
+                        pbar.update(len(batch_cpu))
+
+                        del mse1, mse2, total_mse, w1, batch_gpu
+
+                    except (torch.cuda.OutOfMemoryError, RuntimeError) as e:
+                        is_oom = isinstance(e, torch.cuda.OutOfMemoryError) or "out of memory" in str(e).lower()
+                        if not is_oom:
+                            raise
+
+                        torch.cuda.empty_cache()
+                        gc.collect()
+
+                        old_bs = current_batch_size
+                        current_batch_size = max(1, current_batch_size // 2)
+                        log.warning(
+                            "OOM at k=%d: batch size %d -> %d  (processed %d / %d so far)",
+                            k, old_bs, current_batch_size, processed_count, total_combs,
+                        )
+                        oom_occurred = True
                         break
 
-                    mse1, w1 = solve_batch_torch(
-                        batch_gpu, xt_x_1, xt_y_1, x_te1_t, y_te1, .1
+                if not oom_occurred:
+                    break
+
+                if current_batch_size < 1:
+                    raise RuntimeError(
+                        f"Batch size reduced to 0 at k={k}; cannot continue"
                     )
-                    mse2, _ = solve_batch_torch(
-                        batch_gpu, xt_x_2, xt_y_2, x_te2_t, y_te2, .1
-                    )
-
-                    total_mse = mse1 + mse2
-                    min_idx = np.argmin(total_mse)
-                    min_val = total_mse[min_idx]
-
-                    if min_val < k_best_mse:
-                        k_best_mse = float(min_val)
-
-                    if min_val < best_combined_mse:
-                        best_combined_mse = float(min_val)
-                        best_indices = batch_cpu[min_idx]
-
-                        best_w = w1[min_idx].flatten().cpu().numpy()
-                        formula = " + ".join(
-                            f"{w:+.4e}*{feature_names[i]}"
-                            for w, i in zip(best_w, batch_cpu[min_idx])
-                        )
-                        pbar.set_postfix({"BestMSE": f"{best_combined_mse:.2e}"})
-                        log.debug("New best: %s", formula)
-
-                    mse_history.append(float(min_val))
-                    processed_count += len(batch_cpu)
-                    pbar.update(len(batch_cpu))
-
-                    del mse1, mse2, total_mse, w1
-
-                except torch.OutOfMemoryError:
-                    torch.cuda.empty_cache()
-                    gc.collect()
-                    current_batch_size //= 2
-                    if current_batch_size < 1:
-                        raise RuntimeError("Batch size reduced to zero")
-                    log.warning("OOM: batch size reduced to %d", current_batch_size)
-                    raise RuntimeError("OOM requires manual restart")
 
         elapsed_k = time.perf_counter() - t_k_start
         speed = processed_count / elapsed_k if elapsed_k > 0 else .0
@@ -779,6 +917,29 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
             k_best_mse,
             elapsed_k,
         )
+
+        _save_k_cache(
+            k=k,
+            k_best_mse=k_best_mse,
+            k_best_indices=k_best_indices,
+            k_best_weights=k_best_weights,
+            speed=speed,
+            elapsed=elapsed_k,
+            total_combs=total_combs,
+        )
+        _save_global_state(
+            best_combined_mse=best_combined_mse,
+            best_indices=best_indices,
+            best_weights=best_weights_global,
+            mse_history=mse_history,
+            metrics_k=metrics_k,
+            metrics_combs=metrics_combs,
+            metrics_speed=metrics_speed,
+            metrics_best_mse=metrics_best_mse,
+            metrics_elapsed=metrics_elapsed,
+        )
+        log.info("k=%d results cached to %s", k, GMDH_CACHE_DIR)
+
         torch.cuda.empty_cache()
         gc.collect()
 
@@ -832,7 +993,7 @@ def main() -> None:
 
     df = load_data()
     if df.empty:
-        log.error("No data found in cache directory '%s'", CACHE_DIR)
+        log.error("No data found in cache directory \"%s\"", CACHE_DIR)
         return
 
     log.info("Loaded %d data points", len(df))
