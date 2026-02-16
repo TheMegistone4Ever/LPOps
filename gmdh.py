@@ -819,9 +819,7 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
         k_best_weights = None
         processed_count = 0
 
-        log.info("k=%d: %d combinations", k, total_combs)
-
-        with tqdm(total=total_combs, desc=f"k={k}", ncols=100) as pbar:
+        with tqdm(total=total_combs, desc=f"k={k}: {total_combs} combinations", ncols=100) as pbar:
             while True:
                 comb_gen = combinations(range(n_features), k)
                 if processed_count > 0:
