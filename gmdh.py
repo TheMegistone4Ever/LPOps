@@ -87,12 +87,17 @@ def _f_adler_megiddo(_: np.ndarray, n: np.ndarray) -> np.ndarray:
     return n ** 4
 
 
+def _f_log_n_log_m(m: np.ndarray, n: np.ndarray) -> np.ndarray:
+    return np.log(np.where(m > 1, m, 1.1)) + np.log(np.where(n > 1, n, 1.1))
+
+
 BASIS_FUNCTIONS = {
     "m3n2": _f_refined,
     "mn5lnn": _f_smoothed,
     "poly_mn": _f_poly_mn,
     "general": _f_general,
     "adler_megiddo": _f_adler_megiddo,
+    "log_n_log_m": _f_log_n_log_m,
 }
 
 
