@@ -17,6 +17,7 @@ import pandas as pd
 import torch
 from scipy.optimize import curve_fit
 from sklearn.linear_model import Ridge
+from sklearn.model_selection import KFold
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
@@ -28,6 +29,7 @@ LOG_FILE = "gmdh_execution.log"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float64
 BATCH_SIZE_INITIAL = 4096
+REFIT_IMPROVEMENT_THRESHOLD = 0.01
 
 os.makedirs(PLOTS_DIR, exist_ok=True)
 os.makedirs(GMDH_CACHE_DIR, exist_ok=True)
@@ -277,50 +279,148 @@ def solve_batch_torch(
     return mse_cpu, weights_cpu
 
 
+def _cv_mse(x: np.ndarray, y: np.ndarray, alpha: float = .1, n_splits: int = 5) -> float:
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    mses = list()
+    for tr_idx, te_idx in kf.split(x):
+        model = Ridge(alpha=alpha, fit_intercept=True)
+        model.fit(x[tr_idx], y[tr_idx])
+        pred = model.predict(x[te_idx])
+        mses.append(float(np.mean((y[te_idx] - pred) ** 2)))
+    return float(np.mean(mses))
+
+
 def perform_coefficient_clustering(
         coefs: np.ndarray,
         feature_names: List[str],
         x_data: np.ndarray,
-) -> Tuple[np.ndarray, List[str]]:
-    log.info("Coefficient clustering initiated")
+) -> Tuple[List[int], List[str]]:
+    log.info("Initial clustering of coefficients started")
     t0 = time.perf_counter()
 
     feature_stds = np.std(x_data, axis=0)
     items = list()
-    for w, std, name in zip(coefs, feature_stds, feature_names):
+    for i, (w, std, name) in enumerate(zip(coefs, feature_stds, feature_names)):
         importance = abs(w) * (std if std > 1e-9 else 1.)
-        items.append({"raw_val": w, "name": name, "importance": importance})
+        items.append({"idx": i, "name": name, "importance": importance})
 
     sorted_items = sorted(items, key=lambda x: x["importance"], reverse=True)
 
     if not sorted_items:
-        return np.array(list()), list()
+        return list(), list()
 
     smallest_imp = sorted_items[-1]["importance"]
-    m1 = [sorted_items[0]]
+    cluster_main = [sorted_items[0]]
 
     for i in range(1, len(sorted_items)):
         candidate = sorted_items[i]
-        avg_m1 = sum(item["importance"] for item in m1) / len(m1)
-        dist_good = avg_m1 - candidate["importance"]
+        avg_main = sum(item["importance"] for item in cluster_main) / len(cluster_main)
+        dist_good = avg_main - candidate["importance"]
         dist_bad = candidate["importance"] - smallest_imp
         if dist_good < dist_bad:
-            m1.append(candidate)
+            cluster_main.append(candidate)
         else:
             break
 
-    final_names = [item["name"] for item in m1]
-    final_coefs = np.array([item["raw_val"] for item in m1])
+    cluster_indices = [item["idx"] for item in cluster_main]
+    cluster_names = [item["name"] for item in cluster_main]
 
     elapsed = time.perf_counter() - t0
     log.info(
-        "Clustering complete: retained %d / %d features (%.4f s): %s",
-        len(m1),
+        "Clustering completed: main cluster has %d features out of %d total, elapsed time %.2f seconds: %s",
+        len(cluster_main),
         len(sorted_items),
         elapsed,
+        ", ".join(cluster_names),
+    )
+    return cluster_indices, cluster_names
+
+
+def incremental_refit(
+        cluster_indices: List[int],
+        cluster_names: List[str],
+        x_data: np.ndarray,
+        y_data: np.ndarray,
+        threshold: float = REFIT_IMPROVEMENT_THRESHOLD,
+) -> Tuple[np.ndarray, List[str], float]:
+    log.info(
+        "Incremental refitting started with %d features in cluster, improvement threshold %.2g%%",
+        len(cluster_names),
+        threshold * 100,
+    )
+
+    accepted_global = [cluster_indices[0]]
+    x_curr = x_data[:, accepted_global]
+    current_mse = _cv_mse(x_curr, y_data)
+
+    model = Ridge(alpha=.1, fit_intercept=True)
+    model.fit(x_curr, y_data)
+
+    log.info(
+        "Feature 1: '%s' | CV MSE = %.6e | initial coefficient = %.6e | bias = %.6e",
+        cluster_names[0],
+        model.coef_[0],
+        model.intercept_,
+        current_mse,
+    )
+
+    accepted_local = [0]
+
+    for step in range(1, len(cluster_indices)):
+        trial_global = accepted_global + [cluster_indices[step]]
+        x_trial = x_data[:, trial_global]
+        trial_mse = _cv_mse(x_trial, y_data)
+
+        trial_model = Ridge(alpha=.1, fit_intercept=True)
+        trial_model.fit(x_trial, y_data)
+
+        trial_local = accepted_local + [step]
+        coef_str = ", ".join(
+            f"'{cluster_names[j]}': {c:.6e}"
+            for j, c in zip(trial_local, trial_model.coef_)
+        )
+
+        relative_improvement = (current_mse - trial_mse) / current_mse if current_mse > 0 else 0.
+
+        if relative_improvement > threshold:
+            accepted_global = trial_global
+            accepted_local = trial_local
+            current_mse = trial_mse
+            log.info(
+                "Feature %d: '%s' accepted | CV MSE = %.6e (improvement %.4f%%) | coefficients: {%s} | bias = %.6e",
+                step + 1,
+                cluster_names[step],
+                trial_mse,
+                relative_improvement * 100,
+                coef_str,
+                trial_model.intercept_,
+            )
+        else:
+            log.info(
+                "Feature %d: '%s' rejected | CV MSE = %.6e (improvement %.4f%%) | coefficients if accepted: {%s} | bias if accepted = %.6e",
+                step + 1,
+                cluster_names[step],
+                trial_mse,
+                relative_improvement * 100,
+                threshold * 100,
+                coef_str,
+                trial_model.intercept_,
+            )
+
+    x_final = x_data[:, accepted_global]
+    final_model = Ridge(alpha=.1, fit_intercept=True)
+    final_model.fit(x_final, y_data)
+
+    final_names = [cluster_names[j] for j in accepted_local]
+
+    log.info(
+        "Incremental refitting completed: final model has %d features, CV MSE = %.6e | final coefficients: {%s} | bias = %.6e",
+        len(final_names),
+        current_mse,
         ", ".join(final_names),
     )
-    return final_coefs, final_names
+
+    return final_model.coef_, final_names, final_model.intercept_
 
 
 def _gaussian(x, a, x0, sigma):
@@ -356,7 +456,7 @@ def plot_metrics(
     x_smooth = np.linspace(k_arr.min(), k_arr.max(), 200)
 
     fig, ax = plt.subplots(figsize=(10, 6), dpi=200)
-    ax.plot(k_arr, mse_arr, "b-o", lw=2, markersize=6, label="Best MSE")
+    ax.plot(k_arr, mse_arr, "b-o", lw=2, markersize=6, label="Найкраща MSE")
     if len(k_arr) > 2:
         try:
             log_mse = np.log(mse_arr + 1e-30)
@@ -368,14 +468,14 @@ def plot_metrics(
                 "r--",
                 lw=2,
                 alpha=.4,
-                label="Quadratic fit (log-space)",
+                label="Квадратична апроксимація (лог-простір)",
             )
         except (Exception,):
             pass
     ax.set_yscale("log")
-    ax.set_xlabel("Model complexity (k)")
+    ax.set_xlabel("Складність моделі (k)")
     ax.set_ylabel("MSE")
-    ax.set_title("Best MSE per k")
+    ax.set_title("Найкраща MSE для кожного k")
     ax.grid(True, which="both", alpha=.3)
     ax.legend()
     fig.tight_layout()
@@ -383,7 +483,7 @@ def plot_metrics(
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(10, 6), dpi=200)
-    ax.plot(k_arr, comb_arr, "ko", alpha=.6, label="Actual combinations")
+    ax.plot(k_arr, comb_arr, "ko", alpha=.6, label="Фактичні комбінації")
     try:
         popt = _fit_gaussian(k_arr, comb_arr)
         ax.plot(
@@ -392,13 +492,13 @@ def plot_metrics(
             "r--",
             lw=2,
             alpha=.4,
-            label="Gaussian fit",
+            label="Гауссова апроксимація",
         )
     except (Exception,):
         pass
     ax.set_xlabel("k")
-    ax.set_ylabel("Number of combinations")
-    ax.set_title("Combinations vs k")
+    ax.set_ylabel("Кількість комбінацій")
+    ax.set_title("Комбінації залежно від k")
     ax.legend()
     ax.grid(True, alpha=.3)
     fig.tight_layout()
@@ -406,7 +506,7 @@ def plot_metrics(
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(10, 6), dpi=200)
-    ax.plot(k_arr, speed_arr, "g.", markersize=8, label="Measured speed (it/s)")
+    ax.plot(k_arr, speed_arr, "g.", markersize=8, label="Виміряна швидкість (іт/с)")
     if len(k_arr) > 3:
         try:
             z = np.polyfit(k_arr, speed_arr, 4)
@@ -417,13 +517,13 @@ def plot_metrics(
                 "r--",
                 lw=2,
                 alpha=.4,
-                label="Polynomial fit (deg 4)",
+                label="Поліноміальна апроксимація (ступ. 4)",
             )
         except (Exception,):
             pass
     ax.set_xlabel("k")
-    ax.set_ylabel("Speed (iterations / s)")
-    ax.set_title("Processing speed vs k")
+    ax.set_ylabel("Швидкість (ітерацій / с)")
+    ax.set_title("Швидкість обробки залежно від k")
     ax.legend()
     ax.grid(True, alpha=.3)
     fig.tight_layout()
@@ -431,7 +531,7 @@ def plot_metrics(
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(10, 6), dpi=200)
-    ax.plot(k_arr, time_arr, "m-s", lw=2, markersize=6, label="Total time")
+    ax.plot(k_arr, time_arr, "m-s", lw=2, markersize=6, label="Загальний час")
     if len(k_arr) > 2:
         try:
             popt = _fit_gaussian(k_arr, time_arr)
@@ -441,13 +541,13 @@ def plot_metrics(
                 "r--",
                 lw=2,
                 alpha=.4,
-                label="Gaussian fit",
+                label="Гауссова апроксимація",
             )
         except (Exception,):
             pass
     ax.set_xlabel("k")
-    ax.set_ylabel("Processing time (s)")
-    ax.set_title("Total processing time per k")
+    ax.set_ylabel("Час обробки (с)")
+    ax.set_title("Загальний час обробки для кожного k")
     ax.legend()
     ax.grid(True, alpha=.3)
     fig.tight_layout()
@@ -474,12 +574,12 @@ def plot_loss_history(history: List[float]) -> None:
         markersize=2,
         alpha=.3,
         color="gray",
-        label="Sample models",
+        label="Зразки моделей",
     )
-    ax.plot(accumulated_min, "r-", lw=2, label="Best found")
+    ax.plot(accumulated_min, "r-", lw=2, label="Найкраща знайдена")
     ax.set_yscale("log")
-    ax.set_title("MSE loss dynamics")
-    ax.set_xlabel("Search step")
+    ax.set_title("Динаміка втрат MSE")
+    ax.set_xlabel("Крок пошуку")
     ax.set_ylabel("MSE")
     ax.grid(True, which="both", alpha=.3)
     ax.legend()
@@ -589,7 +689,7 @@ def create_plots(
                 m_r, fit = plot_data["model_fits_m"][n]
                 ax.plot(m_r, fit, "--", label=f"n={n}")
         ax.set_xlabel("m")
-        ax.set_ylabel("Ops")
+        ax.set_ylabel("Операції")
         if scale == "log":
             ax.set_yscale("log")
         ax.grid(True, alpha=.2)
@@ -618,7 +718,7 @@ def create_plots(
                 n_r, fit = plot_data["model_fits_n"][m]
                 ax.plot(n_r, fit, "--", label=f"m={m}")
         ax.set_xlabel("n")
-        ax.set_ylabel("Ops")
+        ax.set_ylabel("Операції")
         if scale == "log":
             ax.set_yscale("log")
         ax.grid(True, alpha=.2)
@@ -653,7 +753,7 @@ def create_plots(
             )
             ax.set_xlabel("m")
             ax.set_ylabel("n")
-            ax.set_zlabel("Ops")
+            ax.set_zlabel("Операції")
             fig.colorbar(surf)
             fig.savefig(os.path.join(plot_dir, f"{safe_name}_{scale}_3d.png"))
             plt.close(fig)
@@ -737,7 +837,7 @@ def _load_global_state() -> Dict[str, Any] | None:
         return None
 
 
-def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
+def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
     t_total_start = time.perf_counter()
     log.info("GMDH initialisation (raw data, no normalisation)")
 
@@ -950,12 +1050,19 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
     plot_loss_history(mse_history)
 
     x_sub_full = x_raw[:, best_indices]
-    final_model = Ridge(alpha=.1, fit_intercept=True)
-    final_model.fit(x_sub_full, y)
+    full_model = Ridge(alpha=.1, fit_intercept=True)
+    full_model.fit(x_sub_full, y)
 
     best_raw_names = [feature_names[i] for i in best_indices]
-    final_coefs, final_names = perform_coefficient_clustering(
-        final_model.coef_, best_raw_names, x_sub_full
+
+    cluster_local_indices, cluster_names = perform_coefficient_clustering(
+        full_model.coef_, best_raw_names, x_sub_full
+    )
+
+    cluster_global_indices = [best_indices[j] for j in cluster_local_indices]
+
+    final_coefs, final_names, final_intercept = incremental_refit(
+        cluster_global_indices, cluster_names, x_raw, y
     )
 
     final_indices_full = [feature_names.index(name) for name in final_names]
@@ -963,7 +1070,7 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
     model_binary = {
         "features": final_names,
         "coefficients": final_coefs,
-        "intercept": final_model.intercept_,
+        "intercept": final_intercept,
         "mse": best_combined_mse,
     }
     joblib.dump(model_binary, os.path.join(PLOTS_DIR, "final_model.bin"))
@@ -974,7 +1081,7 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
         temp_df = pd.DataFrame({"m": m_in.flatten(), "n": n_in.flatten()})
         x_full, _ = generate_full_feature_matrix(temp_df)
         x_sub = x_full.values[:, final_indices_full]
-        return np.dot(x_sub, final_coefs).reshape(m_in.shape)
+        return (np.dot(x_sub, final_coefs) + final_intercept).reshape(m_in.shape)
 
     plot_data = extract_plot_data(df, _predict_wrapper, [None])
     create_plots(plot_data, "GMDH_Refined", params=True, plot_dir=PLOTS_DIR)
@@ -982,7 +1089,7 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
     t_total = time.perf_counter() - t_total_start
     log.info("Total GMDH execution time: %.3f s", t_total)
 
-    return final_names, final_coefs, best_combined_mse
+    return final_names, final_coefs, best_combined_mse, final_intercept
 
 
 def main() -> None:
@@ -997,9 +1104,11 @@ def main() -> None:
     log.info("Loaded %d data points", len(df))
 
     try:
-        names, coefs, mse = run_gmdh(df)
+        names, coefs, mse, intercept = run_gmdh(df)
 
         terms = [f"{w:+.16e} * [{n}]" for w, n in zip(coefs, names)]
+        if abs(intercept) > 1e-12:
+            terms.append(f"{intercept:+.16e}")
         equation = "y = " + "\n    ".join(terms)
 
         log.info("Final model:\n%s", equation)
