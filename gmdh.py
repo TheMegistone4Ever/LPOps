@@ -29,7 +29,7 @@ LOG_FILE = "gmdh_execution.log"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float64
 BATCH_SIZE_INITIAL = 4096
-REFIT_IMPROVEMENT_THRESHOLD = 0.01
+REFIT_IMPROVEMENT_THRESHOLD = .01
 
 os.makedirs(PLOTS_DIR, exist_ok=True)
 os.makedirs(GMDH_CACHE_DIR, exist_ok=True)
@@ -414,10 +414,11 @@ def incremental_refit(
     final_names = [cluster_names[j] for j in accepted_local]
 
     log.info(
-        "Incremental refitting completed: final model has %d features, CV MSE = %.6e | final coefficients: {%s} | bias = %.6e",
+        "Incremental refitting completed: final model has %d features, CV MSE = %.6e | final formula: {%s} | bias = %.6e",
         len(final_names),
         current_mse,
-        ", ".join(final_names),
+        ", ".join(f"'{coef} * {name}" for coef, name in zip(final_model.coef_, final_names)),
+        final_model.intercept_,
     )
 
     return final_model.coef_, final_names, final_model.intercept_
@@ -473,9 +474,9 @@ def plot_metrics(
         except (Exception,):
             pass
     ax.set_yscale("log")
-    ax.set_xlabel("Складність моделі (k)")
-    ax.set_ylabel("MSE")
-    ax.set_title("Найкраща MSE для кожного k")
+    ax.set_xlabel("Складність моделі ($k$ термів)", fontsize=14)
+    ax.set_ylabel("Середньоквадратична похибка (MSE)", fontsize=14)
+    ax.set_title("Залежність точності від складності моделі", fontsize=16, pad=15)
     ax.grid(True, which="both", alpha=.3)
     ax.legend()
     fig.tight_layout()
@@ -574,13 +575,13 @@ def plot_loss_history(history: List[float]) -> None:
         markersize=2,
         alpha=.3,
         color="gray",
-        label="Зразки моделей",
+        label="Оцінені моделі (пошук)",
     )
     ax.plot(accumulated_min, "r-", lw=2, label="Найкраща знайдена")
     ax.set_yscale("log")
-    ax.set_title("Динаміка втрат MSE")
-    ax.set_xlabel("Крок пошуку")
-    ax.set_ylabel("MSE")
+    ax.set_title("Динаміка збіжності алгоритму МГУА (GMDH)", fontsize=18, pad=20)
+    ax.set_xlabel("Кількість перевірених гіпотез (ітерації)", fontsize=14)
+    ax.set_ylabel("Середньоквадратична похибка (MSE, log)", fontsize=14)
     ax.grid(True, which="both", alpha=.3)
     ax.legend()
     fig.tight_layout()
@@ -687,12 +688,14 @@ def create_plots(
             )
             if params is not None:
                 m_r, fit = plot_data["model_fits_m"][n]
-                ax.plot(m_r, fit, "--", label=f"n={n}")
+                label = f"Fit ({n=})"
+                ax.plot(m_r, fit, "--", linewidth=1.5, label=label)
         ax.set_xlabel("m")
         ax.set_ylabel("Операції")
         if scale == "log":
             ax.set_yscale("log")
         ax.grid(True, alpha=.2)
+        ax.legend(title="Апроксимації", fontsize=8, loc="upper left")
 
         ax = axes[1]
         for m in plot_data["m_vals"]:
@@ -716,12 +719,16 @@ def create_plots(
             )
             if params is not None:
                 n_r, fit = plot_data["model_fits_n"][m]
-                ax.plot(n_r, fit, "--", label=f"m={m}")
+                label = f"Fit ({m=})"
+                ax.plot(n_r, fit, "--", linewidth=1.5, label=label)
         ax.set_xlabel("n")
         ax.set_ylabel("Операції")
         if scale == "log":
             ax.set_yscale("log")
         ax.grid(True, alpha=.2)
+        ax.legend(title="Апроксимації", fontsize=8, loc="upper left")
+
+        fig.suptitle(f"Порівняння даних та моделі: {model_name} ({scale} scale)", fontsize=20, y=.98)
 
         fig.tight_layout()
         fig.savefig(os.path.join(plot_dir, f"{safe_name}_{scale}_2d.png"))
@@ -751,10 +758,14 @@ def create_plots(
                 c="red",
                 marker="o",
             )
+            ax.set_title(f"3D Поверхня складності: {model_name}", fontsize=18)
             ax.set_xlabel("m")
             ax.set_ylabel("n")
             ax.set_zlabel("Операції")
+            ax.view_init(elev=25, azim=-45)
+            ax.legend(["Модель", "Середні дані"], loc="upper left")
             fig.colorbar(surf)
+            fig.tight_layout()
             fig.savefig(os.path.join(plot_dir, f"{safe_name}_{scale}_3d.png"))
             plt.close(fig)
 
