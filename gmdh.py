@@ -761,7 +761,6 @@ def create_plots(
             ax.set_xlabel("m")
             ax.set_ylabel("n")
             ax.set_zlabel("Операції")
-            ax.view_init(elev=25, azim=-45)
             ax.legend(["Модель", "Середні дані"], loc="upper left")
             fig.colorbar(surf)
             fig.tight_layout()
