@@ -40,12 +40,12 @@ if torch.cuda.is_available():
 
 
 def _configure_logging() -> logging.Logger:
-    logger = logging.getLogger("gmdh")
+    logger = logging.getLogger("[GMDH]")
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
 
     formatter = logging.Formatter(
-        "%(asctime)s [%(levelname)-7s] %(message)s",
+        "%(asctime)s [%(levelname)-7s] [%(name)s] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
