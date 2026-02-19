@@ -16,8 +16,9 @@ import numpy as np
 import pandas as pd
 import torch
 from scipy.optimize import curve_fit
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Ridge, LassoCV
 from sklearn.model_selection import KFold
+from sklearn.preprocessing import StandardScaler
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
@@ -846,7 +847,7 @@ def _load_global_state() -> Dict[str, Any] | None:
         return None
 
 
-def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
+def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, List[str], np.ndarray, float]:
     t_total_start = time.perf_counter()
     log.info("GMDH initialisation (raw data, no normalisation)")
 
@@ -1059,13 +1060,82 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
     plot_loss_history(mse_history)
 
     x_sub_full = x_raw[:, best_indices]
-    final_model = Ridge(alpha=0.0, fit_intercept=False)
-    final_model.fit(x_sub_full, y)
-
     best_raw_names = [feature_names[i] for i in best_indices]
 
+    _eps = 1e-30
+    x_sub_pos = np.abs(x_sub_full)
+    x_sub_pos = np.where(x_sub_pos > _eps, x_sub_pos, _eps)
+    log_x = np.log(x_sub_pos)
+    log_y = np.log(np.maximum(y, _eps))
+
+    redundant_scaler = StandardScaler()
+    log_x_scaled = redundant_scaler.fit_transform(log_x)
+
+    redundant_lasso = LassoCV(
+        alphas=np.logspace(-4, 4, 120),
+        fit_intercept=True,
+        positive=True,
+        cv=5,
+        max_iter=200_000,
+        n_jobs=-1,
+    )
+    redundant_lasso.fit(log_x_scaled, log_y)
+
+    w_log_scaled = redundant_lasso.coef_
+    w_log = w_log_scaled / redundant_scaler.scale_
+    log_bias = float(redundant_lasso.intercept_) - float(
+        np.dot(w_log_scaled / redundant_scaler.scale_, redundant_scaler.mean_)
+    )
+
+    nonzero_mask = w_log > 0.
+    if not np.any(nonzero_mask):
+        nonzero_mask = np.zeros(len(w_log), dtype=bool)
+        nonzero_mask[np.argmax(w_log)] = True
+
+    redundant_indices_full = [best_indices[i] for i, keep in enumerate(nonzero_mask) if keep]
+    redundant_names = [best_raw_names[i] for i, keep in enumerate(nonzero_mask) if keep]
+
+    redundant_coefs = w_log[nonzero_mask]
+    redundant_bias = log_bias
+
+    log_y_pred_train = redundant_lasso.predict(log_x_scaled)
+    redundant_cv_mse = float(np.mean((np.exp(log_y_pred_train) - y) ** 2))
+    log.info(
+        "Redundant model (log-Lasso+positive): alpha=%.4e, log_bias=%.4e, "
+        "%d/%d features non-zero, train MSE=%.6e",
+        float(redundant_lasso.alpha_),
+        log_bias,
+        int(nonzero_mask.sum()),
+        len(best_raw_names),
+        redundant_cv_mse,
+    )
+
+    # predict: exp(bias + sum(w_i * log(|feat_i|)))  = exp(bias) * prod(|feat_i|^w_i)
+    def _redundant_predict_wrapper(coords, *_args):
+        m_in, n_in = coords
+        orig_shape = m_in.shape
+        temp_df = pd.DataFrame({"m": m_in.flatten(), "n": n_in.flatten()})
+        x_full_tmp, _ = generate_full_feature_matrix(temp_df)
+        x_sub_tmp = np.abs(x_full_tmp.values[:, redundant_indices_full])
+        x_sub_tmp = np.where(x_sub_tmp > _eps, x_sub_tmp, _eps)
+        log_pred = np.dot(np.log(x_sub_tmp), redundant_coefs) + redundant_bias
+        return np.exp(log_pred).reshape(orig_shape)
+
+    redundant_model_binary = {
+        "features": redundant_names,
+        "coefficients": redundant_coefs,
+        "bias": redundant_bias,
+        "mse": redundant_cv_mse,
+    }
+    joblib.dump(redundant_model_binary, os.path.join(PLOTS_DIR, "redundant_model.bin"))
+    log.info("Redundant model binary saved (до кластеризації)")
+
+    redundant_plot_data = extract_plot_data(df, _redundant_predict_wrapper, [None])
+    create_plots(redundant_plot_data, "GMDH_Redundant", params=True, plot_dir=PLOTS_DIR)
+    log.info("Redundant model plots saved")
+
     cluster_local_indices, cluster_names = perform_coefficient_clustering(
-        final_model.coef_, best_raw_names, x_sub_full
+        redundant_coefs, best_raw_names, x_sub_full
     )
 
     cluster_global_indices = [best_indices[j] for j in cluster_local_indices]
@@ -1097,7 +1167,7 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float]:
     t_total = time.perf_counter() - t_total_start
     log.info("Total GMDH execution time: %.3f s", t_total)
 
-    return final_names, final_coefs, best_combined_mse
+    return final_names, final_coefs, best_combined_mse, redundant_names, redundant_coefs, redundant_bias
 
 
 def main() -> None:
@@ -1112,17 +1182,28 @@ def main() -> None:
     log.info("Loaded %d data points", len(df))
 
     try:
-        names, coefs, mse = run_gmdh(df)
+        names, coefs, mse, redundant_names, redundant_coefs, redundant_bias = run_gmdh(df)
 
         terms = [f"{w:+.16e} * [{n}]" for w, n in zip(coefs, names)]
         equation = "y = " + "\n    ".join(terms)
 
+        redundant_terms = [f"{w:+.16e} * [{n}]" for w, n in zip(redundant_coefs, redundant_names)]
+        redundant_equation = (
+                "y = " + "\n    ".join(redundant_terms)
+                + f"\n    {redundant_bias:+.16e}  [bias]"
+        )
+
         log.info("Final model:\n%s", equation)
         log.info("Final MSE: %.6e", mse)
+        log.info("Redundant model:\n%s", redundant_equation)
 
         with open(
                 os.path.join(PLOTS_DIR, "final_formula.txt"), "w", encoding="utf-8"
         ) as fh:
+            fh.write("Надлишковий опис (повна формула до кластеризації):\n\n")
+            fh.write(redundant_equation)
+            fh.write("\n\n")
+            fh.write("Фінальна формула (після кластеризації та відбору):\n\n")
             fh.write(equation)
 
         log.info("Formula written to %s/final_formula.txt", PLOTS_DIR)
