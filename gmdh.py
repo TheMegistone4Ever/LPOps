@@ -202,47 +202,42 @@ def load_data() -> pd.DataFrame:
 def perform_coefficient_clustering(
         coefs: np.ndarray,
         feature_names: List[str],
-        x_data: np.ndarray,
 ) -> Tuple[List[str], List[str]]:
     """
-    Сортуємо за важливістю = |коеф| * стд(ознака).
-    Кластеризація: M1 (важливі) та M2 (решта).
+    Сортуємо за спаданням модулів коефіцієнтів |coef|.
+    Кластеризація: M1 (важливі, великі |coef|) та M2 (решта, малі |coef|).
     Повертає (m1_імена, m2_імена).
     """
-    feature_stds = np.std(x_data, axis=0)
     items = []
-    for w, std, name in tqdm(
-            zip(coefs, feature_stds, feature_names),
-            desc="Кластеризація коефіцієнтів",
-            ncols=100,
-    ):
-        importance = abs(w) * (std if std > 1e-9 else 1.0)
-        items.append({"name": name, "importance": importance})
+    for w, name in zip(coefs, feature_names):
+        items.append({"name": name, "abs_coef": abs(w)})
 
-    sorted_items = sorted(items, key=lambda x: x["importance"], reverse=True)
+    # Сортуємо за спаданням модуля коефіцієнта
+    sorted_items = sorted(items, key=lambda x: x["abs_coef"], reverse=True)
 
     if not sorted_items:
         return [], list(feature_names)
 
-    smallest_imp = sorted_items[-1]["importance"]
+    smallest_abs = sorted_items[-1]["abs_coef"]
     m1_items = [sorted_items[0]]
 
-    for i in tqdm(
-            range(1, len(sorted_items)),
-            desc="Визначення розбиття M1/M2",
-            ncols=100,
-    ):
+    for i in range(1, len(sorted_items)):
         candidate = sorted_items[i]
-        avg_m1 = sum(it["importance"] for it in m1_items) / len(m1_items)
-        dist_good = avg_m1 - candidate["importance"]
-        dist_bad = candidate["importance"] - smallest_imp
-        if dist_good < dist_bad:
+        avg_m1 = sum(it["abs_coef"] for it in m1_items) / len(m1_items)
+        dist_to_m1 = avg_m1 - candidate["abs_coef"]
+        dist_to_m2 = candidate["abs_coef"] - smallest_abs
+        if dist_to_m1 < dist_to_m2:
             m1_items.append(candidate)
         else:
             break
 
     m1_names = [it["name"] for it in m1_items]
     m2_names = [it["name"] for it in sorted_items if it["name"] not in m1_names]
+
+    log.info("Кластеризація: M1 (%d ознак), M2 (%d ознак)", len(m1_names), len(m2_names))
+    for it in sorted_items:
+        cluster = "M1" if it["name"] in m1_names else "M2"
+        log.info("  [%s] %-25s |коеф| = %.6e", cluster, it["name"], it["abs_coef"])
 
     return m1_names, m2_names
 
@@ -641,7 +636,7 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
             log.info("    %-25s : %+.6e", name, c)
 
         m1_1_names, m2_1_names = perform_coefficient_clustering(
-            coefs_1, feature_names, x_half1
+            coefs_1, feature_names
         )
 
         _save_cache("крок2а_кластеризація_половина1", {
@@ -675,7 +670,7 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
             log.info("    %-25s : %+.6e", name, c)
 
         m1_2_names, m2_2_names = perform_coefficient_clustering(
-            coefs_2, feature_names, x_half2
+            coefs_2, feature_names
         )
 
         _save_cache("крок2б_кластеризація_половина2", {
