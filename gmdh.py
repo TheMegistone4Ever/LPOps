@@ -114,7 +114,7 @@ def build_feature_matrix(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
 def load_data() -> pd.DataFrame:
     if not os.path.exists(CACHE_DIR):
         return pd.DataFrame()
-    all_data = []
+    all_data = list()
     files = [f for f in os.listdir(CACHE_DIR) if f.endswith(".pkl")]
     for function_name in tqdm(files, desc="Завантаження кешу", ncols=100):
         try:
@@ -239,7 +239,7 @@ def solve_and_cluster(x_data, y_data, feature_names, alpha):
     sorted_names = [feature_names[i] for i in order]
 
     if len(sorted_abs) <= 1:
-        return raw_coefs, sorted_names, []
+        return raw_coefs, sorted_names, list()
 
     m1_names = [sorted_names[0]]
     split_pos = 1
@@ -554,8 +554,8 @@ def run_gmdh(df: pd.DataFrame):
     log.info("SSE тільки M1: %.6e", sse_m1_only)
 
     best_sse = sse_m1_only
-    best_m2_combo = []
-    best_m2_combo_names = []
+    best_m2_combo = list()
+    best_m2_combo_names = list()
     n_m2 = len(m2_indices_list)
     total_combos = sum(math.comb(n_m2, k) for k in range(1, n_m2 + 1))
 
@@ -577,8 +577,8 @@ def run_gmdh(df: pd.DataFrame):
 
         t_k = time.perf_counter()
         k_best_sse = float("inf")
-        k_best_combo = []
-        k_best_names = []
+        k_best_combo = list()
+        k_best_names = list()
         processed = 0
         batch_size = BATCH_SIZE
 
@@ -590,7 +590,7 @@ def run_gmdh(df: pd.DataFrame):
 
                 oom = False
                 for batch_cpu in _batched(combo_gen, batch_size):
-                    full_indices = []
+                    full_indices = list()
                     for combo in batch_cpu:
                         feat_idx = m1_indices_list + [m2_indices_list[j] for j in combo]
                         full_indices.append(feat_idx)
@@ -664,7 +664,7 @@ def run_gmdh(df: pd.DataFrame):
     log.info("Фінальна підгонка на ВСІХ даних")
 
     cached_final = load_cache_final()
-    if cached_final is not None and set(cached_final.get("best_all_names", [])) == set(best_all_names):
+    if cached_final is not None and set(cached_final.get("best_all_names", list())) == set(best_all_names):
         final_coefs = cached_final["final_coefs"]
         final_intercept = cached_final["final_intercept"]
         final_sse = cached_final["final_sse"]
