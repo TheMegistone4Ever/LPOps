@@ -10,6 +10,7 @@ from itertools import combinations
 from typing import Any, List, Optional, Tuple, Callable
 
 import joblib
+import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -17,6 +18,9 @@ from sklearn.linear_model import Ridge
 from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
+
+# Шрифт для коректного відображення кирилиці на графіках
+matplotlib.rcParams["font.family"] = "DejaVu Sans"
 
 CACHE_DIR = "cache"
 GMDH_CACHE_DIR = "gmdh_cache"
@@ -27,7 +31,7 @@ os.makedirs(PLOTS_DIR, exist_ok=True)
 os.makedirs(GMDH_CACHE_DIR, exist_ok=True)
 
 
-# ═══════════════════════════ LOGGING ═══════════════════════════
+# ═══════════════════════════ ЛОГУВАННЯ ═══════════════════════════
 
 def _configure_logging() -> logging.Logger:
     logger = logging.getLogger("gmdh")
@@ -55,7 +59,7 @@ def _configure_logging() -> logging.Logger:
 log = _configure_logging()
 
 
-# ═══════════════════════ CACHE HELPERS ═════════════════════════
+# ═══════════════════════ ДОПОМІЖНІ ФУНКЦІЇ КЕШУ ═════════════════════════
 
 def _cache_path(name: str) -> str:
     return os.path.join(GMDH_CACHE_DIR, f"{name}.pkl")
@@ -65,7 +69,7 @@ def _save_cache(name: str, data: Any) -> None:
     path = _cache_path(name)
     with open(path, "wb") as f:
         pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
-    log.debug("Cache saved: %s", path)
+    log.debug("Кеш збережено: %s", path)
 
 
 def _load_cache(name: str) -> Optional[Any]:
@@ -75,10 +79,10 @@ def _load_cache(name: str) -> Optional[Any]:
     try:
         with open(path, "rb") as f:
             data = pickle.load(f)
-        log.debug("Cache loaded: %s", path)
+        log.debug("Кеш завантажено: %s", path)
         return data
     except (pickle.UnpicklingError, EOFError, Exception) as e:
-        log.warning("Cache corrupted %s: %s", path, e)
+        log.warning("Кеш пошкоджено %s: %s", path, e)
         return None
 
 
@@ -86,7 +90,7 @@ def _cache_exists(name: str) -> bool:
     return os.path.exists(_cache_path(name))
 
 
-# ═══════════════════ BASIS FUNCTIONS ═══════════════════════════
+# ═══════════════════ БАЗИСНІ ФУНКЦІЇ ═══════════════════════════
 
 def _f_refined(m: np.ndarray, n: np.ndarray) -> np.ndarray:
     return (m ** 3) * (n ** 2)
@@ -129,7 +133,7 @@ BASIS_FUNCTIONS = {
 }
 
 
-# ═══════════════ FEATURE MATRIX GENERATION ═════════════════════
+# ═══════════════ ГЕНЕРАЦІЯ МАТРИЦІ ОЗНАК ═════════════════════
 
 def generate_full_feature_matrix(
         df: pd.DataFrame,
@@ -160,7 +164,7 @@ def generate_full_feature_matrix(
     return pd.DataFrame(final_data), feature_names
 
 
-# ═══════════════════ DATA LOADING ══════════════════════════════
+# ═══════════════════ ЗАВАНТАЖЕННЯ ДАНИХ ══════════════════════════════
 
 def load_data() -> pd.DataFrame:
     if not os.path.exists(CACHE_DIR):
@@ -169,7 +173,7 @@ def load_data() -> pd.DataFrame:
     all_data: List[List] = []
     files = [f for f in os.listdir(CACHE_DIR) if f.endswith(".pkl")]
 
-    for fname in tqdm(files, desc="Loading cache", ncols=100):
+    for fname in tqdm(files, desc="Завантаження кешу", ncols=100):
         try:
             with open(os.path.join(CACHE_DIR, fname), "rb") as fh:
                 data = pickle.load(fh)
@@ -193,7 +197,7 @@ def load_data() -> pd.DataFrame:
     return df[df["ops"] > 0]
 
 
-# ═══════════════ COEFFICIENT CLUSTERING ════════════════════════
+# ═══════════════ КЛАСТЕРИЗАЦІЯ КОЕФІЦІЄНТІВ ════════════════════════
 
 def perform_coefficient_clustering(
         coefs: np.ndarray,
@@ -201,16 +205,15 @@ def perform_coefficient_clustering(
         x_data: np.ndarray,
 ) -> Tuple[List[str], List[str]]:
     """
-    Сортуємо за importance = |coef| * std(feature).
+    Сортуємо за важливістю = |коеф| * стд(ознака).
     Кластеризація: M1 (важливі) та M2 (решта).
-    Повертає (m1_names, m2_names).
+    Повертає (m1_імена, m2_імена).
     """
     feature_stds = np.std(x_data, axis=0)
     items = []
-    # for w, std, name in zip(coefs, feature_stds, feature_names):
     for w, std, name in tqdm(
             zip(coefs, feature_stds, feature_names),
-            desc="Clustering coefficients",
+            desc="Кластеризація коефіцієнтів",
             ncols=100,
     ):
         importance = abs(w) * (std if std > 1e-9 else 1.0)
@@ -224,10 +227,9 @@ def perform_coefficient_clustering(
     smallest_imp = sorted_items[-1]["importance"]
     m1_items = [sorted_items[0]]
 
-    # for i in range(1, len(sorted_items)):
     for i in tqdm(
             range(1, len(sorted_items)),
-            desc="Determining M1/M2 split",
+            desc="Визначення розбиття M1/M2",
             ncols=100,
     ):
         candidate = sorted_items[i]
@@ -245,34 +247,36 @@ def perform_coefficient_clustering(
     return m1_names, m2_names
 
 
-# ═══════════════════ LSM / SSE ═════════════════════════════════
+# ═══════════════════ МНК / ЗСК ═════════════════════════════════
 
 def fit_lsm(
         x_train: np.ndarray, y_train: np.ndarray, alpha: float = 0.1
 ) -> Ridge:
+    """Підгонка моделі методом найменших квадратів (Ridge-регресія)."""
     model = Ridge(alpha=alpha, fit_intercept=True)
     model.fit(x_train, y_train)
     return model
 
 
 def compute_sse(model: Ridge, x_test: np.ndarray, y_test: np.ndarray) -> float:
+    """Обчислення залишкової суми квадратів (ЗСК / SSE)."""
     y_pred = model.predict(x_test)
     return float(np.sum((y_test - y_pred) ** 2))
 
 
-# ═══════════════════ SCIENTIFIC PLOTS ══════════════════════════
+# ═══════════════════ НАУКОВІ ГРАФІКИ ══════════════════════════
 
 def plot_model_vs_data(
         df: pd.DataFrame,
         predict_func: Callable,
         plot_dir: str,
-        model_name: str = "GMDH",
+        model_name: str = "МГУА",
         predict_m1_only: Callable = None,
         predict_m1_m2_all: Callable = None,
 ) -> None:
     """
     Наукові графіки:
-    - 2D slices з boxplot + три моделі (M1+bias, M1+M2+bias, найкраща)
+    - 2D зрізи з boxplot + три моделі (M1+зміщення, M1+M2+зміщення, найкраща)
     - Графік залишків
     - 3D поверхні для всіх трьох моделей
     """
@@ -284,12 +288,12 @@ def plot_model_vs_data(
     y_predicted = predict_func(df["m"].values, df["n"].values)
 
     # ═══════════════════════════════════════════════════════════
-    # 2D slices: boxplot + model curves
+    # 2D зрізи: boxplot + криві моделей
     # ═══════════════════════════════════════════════════════════
     for scale in ("linear", "log"):
         fig, axes = plt.subplots(1, 2, figsize=(30, 20), dpi=200)
 
-        # ── Left: ops vs m, fixed n ──
+        # ── Ліворуч: операції vs m, фіксоване n ──
         ax = axes[0]
         for n_fixed in n_vals:
             subset = df[df["n"] == n_fixed]
@@ -308,7 +312,7 @@ def plot_model_vs_data(
             for median in bp["medians"]:
                 median.set(color="red", linewidth=2)
 
-            # Average line
+            # Лінія середніх значень
             avg_ops = subset.groupby("m")["ops"].mean()
             ax.plot(
                 avg_ops.index, avg_ops.values,
@@ -317,50 +321,51 @@ def plot_model_vs_data(
 
             m_range = np.linspace(min(m_vals), max(m_vals), 100)
 
-            # M1 + bias (залишковий)
+            # M1 + зміщення (залишковий опис)
             if predict_m1_only is not None:
                 y_m1 = predict_m1_only(m_range, np.full_like(m_range, n_fixed))
                 ax.plot(
                     m_range, y_m1, ":",
                     color="orange", linewidth=2, alpha=0.7,
-                    label=f"M1+bias (n={n_fixed})" if n_fixed == n_vals[0] else "",
                 )
 
-            # M1 + ALL M2 + bias (надлишковий)
+            # M1 + усі M2 + зміщення (надлишковий опис)
             if predict_m1_m2_all is not None:
                 y_all = predict_m1_m2_all(m_range, np.full_like(m_range, n_fixed))
                 ax.plot(
                     m_range, y_all, "-.",
                     color="purple", linewidth=2, alpha=0.7,
-                    label=f"M1+M2+bias (n={n_fixed})" if n_fixed == n_vals[0] else "",
                 )
 
-            # Best formula (M1 + selected M2 + bias)
+            # Найкраща формула (M1 + відібрані M2 + зміщення)
             y_best = predict_func(m_range, np.full_like(m_range, n_fixed))
             ax.plot(
                 m_range, y_best, "--",
                 color="green", linewidth=2.5,
-                label=f"Найкраща (n={n_fixed})" if n_fixed == n_vals[0] else "",
             )
 
         ax.set_xlabel("m (кількість обмежень)", fontsize=12)
-        ax.set_ylabel("Операції", fontsize=12)
-        ax.set_title("Залежність операцій від m", fontsize=13)
+        ax.set_ylabel("Кількість операцій", fontsize=12)
+        ax.set_title("Залежність кількості операцій від m", fontsize=13)
         if scale == "log":
             ax.set_yscale("log")
         ax.grid(True, alpha=0.2)
 
-        # Legend with model descriptions
+        # Легенда з описами моделей
         from matplotlib.lines import Line2D
         legend_elements = [
-            Line2D([0], [0], color="orange", ls=":", lw=2, label="M1 + bias (залишковий)"),
-            Line2D([0], [0], color="purple", ls="-.", lw=2, label="M1 + M2(all) + bias (надлишковий)"),
-            Line2D([0], [0], color="green", ls="--", lw=2.5, label="Найкраща формула (МГУА)"),
-            Line2D([0], [0], color="black", ls="-", lw=1, label="Середнє значення даних"),
+            Line2D([0], [0], color="orange", ls=":", lw=2,
+                   label="M1 + зміщення (залишковий опис)"),
+            Line2D([0], [0], color="purple", ls="-.", lw=2,
+                   label="M1 + M2(усі) + зміщення (надлишковий опис)"),
+            Line2D([0], [0], color="green", ls="--", lw=2.5,
+                   label="Найкраща формула (МГУА)"),
+            Line2D([0], [0], color="black", ls="-", lw=1,
+                   label="Середнє значення даних"),
         ]
         ax.legend(handles=legend_elements, fontsize=10, loc="upper left")
 
-        # ── Right: ops vs n, fixed m ──
+        # ── Праворуч: операції vs n, фіксоване m ──
         ax = axes[1]
         for m_fixed in m_vals:
             subset = df[df["m"] == m_fixed]
@@ -387,7 +392,7 @@ def plot_model_vs_data(
 
             n_range = np.linspace(min(n_vals), max(n_vals), 100)
 
-            # M1 + bias
+            # M1 + зміщення
             if predict_m1_only is not None:
                 y_m1 = predict_m1_only(np.full_like(n_range, m_fixed), n_range)
                 ax.plot(
@@ -395,7 +400,7 @@ def plot_model_vs_data(
                     color="orange", linewidth=2, alpha=0.7,
                 )
 
-            # M1 + ALL M2 + bias
+            # M1 + усі M2 + зміщення
             if predict_m1_m2_all is not None:
                 y_all = predict_m1_m2_all(np.full_like(n_range, m_fixed), n_range)
                 ax.plot(
@@ -403,7 +408,7 @@ def plot_model_vs_data(
                     color="purple", linewidth=2, alpha=0.7,
                 )
 
-            # Best formula
+            # Найкраща формула
             y_best = predict_func(np.full_like(n_range, m_fixed), n_range)
             ax.plot(
                 n_range, y_best, "--",
@@ -411,22 +416,24 @@ def plot_model_vs_data(
             )
 
         ax.set_xlabel("n (кількість змінних)", fontsize=12)
-        ax.set_ylabel("Операції", fontsize=12)
-        ax.set_title("Залежність операцій від n", fontsize=13)
+        ax.set_ylabel("Кількість операцій", fontsize=12)
+        ax.set_title("Залежність кількості операцій від n", fontsize=13)
         if scale == "log":
             ax.set_yscale("log")
         ax.grid(True, alpha=0.2)
         ax.legend(handles=legend_elements, fontsize=10, loc="upper left")
 
+        scale_name = "лінійний" if scale == "linear" else "логарифмічний"
         fig.suptitle(
-            f"Модель {safe_name}: дані vs апроксимація ({scale})", fontsize=14
+            f"Модель {safe_name}: дані та апроксимація ({scale_name} масштаб)",
+            fontsize=14,
         )
         fig.tight_layout()
         fig.savefig(os.path.join(plot_dir, f"{safe_name}_{scale}_2d.png"))
         plt.close(fig)
 
     # ═══════════════════════════════════════════════════════════
-    # Residuals (для найкращої формули)
+    # Залишки (для найкращої формули)
     # ═══════════════════════════════════════════════════════════
     residuals = y_actual - y_predicted
 
@@ -436,8 +443,8 @@ def plot_model_vs_data(
     ax.scatter(y_predicted, residuals, s=8, alpha=0.4, c="steelblue")
     ax.axhline(0, color="red", lw=1.5, ls="--")
     ax.set_xlabel("Передбачені значення", fontsize=12)
-    ax.set_ylabel("Залишки (actual − predicted)", fontsize=12)
-    ax.set_title("Залишки vs передбачені значення", fontsize=13)
+    ax.set_ylabel("Залишки (факт − прогноз)", fontsize=12)
+    ax.set_title("Залишки відносно передбачених значень", fontsize=13)
     ax.grid(True, alpha=0.3)
 
     ax = axes[1]
@@ -446,21 +453,21 @@ def plot_model_vs_data(
     lim_max = max(y_actual.max(), y_predicted.max())
     ax.plot(
         [lim_min, lim_max], [lim_min, lim_max],
-        "r--", lw=1.5, label="Ідеал (y=x)",
+        "r--", lw=1.5, label="Ідеал (y = x)",
     )
-    ax.set_xlabel("Реальні значення", fontsize=12)
+    ax.set_xlabel("Фактичні значення", fontsize=12)
     ax.set_ylabel("Передбачені значення", fontsize=12)
-    ax.set_title("Реальні vs передбачені", fontsize=13)
+    ax.set_title("Фактичні та передбачені значення", fontsize=13)
     ax.legend()
     ax.grid(True, alpha=0.3)
 
     fig.suptitle(f"Модель {safe_name}: аналіз залишків", fontsize=14)
     fig.tight_layout()
-    fig.savefig(os.path.join(plot_dir, f"{safe_name}_residuals.png"))
+    fig.savefig(os.path.join(plot_dir, f"{safe_name}_залишки.png"))
     plt.close(fig)
 
     # ═══════════════════════════════════════════════════════════
-    # 3D surfaces: all three models
+    # 3D поверхні: усі три моделі
     # ═══════════════════════════════════════════════════════════
     df_grouped = df.groupby(["m", "n"])["ops"].mean().reset_index()
 
@@ -470,7 +477,7 @@ def plot_model_vs_data(
             np.linspace(min(n_vals), max(n_vals), 50),
         )
 
-        # Compute surfaces
+        # Обчислення поверхонь
         ops_best = predict_func(
             m_grid.ravel(), n_grid.ravel()
         ).reshape(m_grid.shape)
@@ -497,9 +504,12 @@ def plot_model_vs_data(
                 ops_all = np.log10(np.clip(ops_all, 1e-9, None))
             ops_data = np.log10(np.clip(ops_data, 1e-9, None))
 
+        z_label = "log₁₀(Операції)" if scale == "log" else "Кількість операцій"
+        scale_name = "лінійний" if scale == "linear" else "логарифмічний"
+
         fig = plt.figure(figsize=(20, 14), dpi=150)
 
-        # --- Subplot 1: M1 + bias (залишковий) ---
+        # --- Підграфік 1: M1 + зміщення (залишковий) ---
         if ops_m1 is not None:
             ax1 = fig.add_subplot(131, projection="3d")
             ax1.plot_surface(
@@ -512,13 +522,12 @@ def plot_model_vs_data(
                 ops_data,
                 c="red", marker="o", s=15,
             )
-            ax1.set_xlabel("m", fontsize=10)
-            ax1.set_ylabel("n", fontsize=10)
-            z_label = "log₁₀(Ops)" if scale == "log" else "Ops"
+            ax1.set_xlabel("m (обмеження)", fontsize=10)
+            ax1.set_ylabel("n (змінні)", fontsize=10)
             ax1.set_zlabel(z_label, fontsize=10)
-            ax1.set_title("M1 + bias\n(залишковий)", fontsize=11)
+            ax1.set_title("M1 + зміщення\n(залишковий опис)", fontsize=11)
 
-        # --- Subplot 2: M1 + ALL M2 + bias (надлишковий) ---
+        # --- Підграфік 2: M1 + усі M2 + зміщення (надлишковий) ---
         if ops_all is not None:
             ax2 = fig.add_subplot(132, projection="3d")
             ax2.plot_surface(
@@ -531,12 +540,12 @@ def plot_model_vs_data(
                 ops_data,
                 c="red", marker="o", s=15,
             )
-            ax2.set_xlabel("m", fontsize=10)
-            ax2.set_ylabel("n", fontsize=10)
+            ax2.set_xlabel("m (обмеження)", fontsize=10)
+            ax2.set_ylabel("n (змінні)", fontsize=10)
             ax2.set_zlabel(z_label, fontsize=10)
-            ax2.set_title("M1 + M2(all) + bias\n(надлишковий)", fontsize=11)
+            ax2.set_title("M1 + M2(усі) + зміщення\n(надлишковий опис)", fontsize=11)
 
-        # --- Subplot 3: Best formula ---
+        # --- Підграфік 3: Найкраща формула ---
         ax3 = fig.add_subplot(133, projection="3d")
         ax3.plot_surface(
             m_grid, n_grid, ops_best,
@@ -548,13 +557,14 @@ def plot_model_vs_data(
             ops_data,
             c="red", marker="o", s=15,
         )
-        ax3.set_xlabel("m", fontsize=10)
-        ax3.set_ylabel("n", fontsize=10)
+        ax3.set_xlabel("m (обмеження)", fontsize=10)
+        ax3.set_ylabel("n (змінні)", fontsize=10)
         ax3.set_zlabel(z_label, fontsize=10)
-        ax3.set_title("Найкраща формула\n(МГУА)", fontsize=11)
+        ax3.set_title("Найкраща формула\n(результат МГУА)", fontsize=11)
 
         fig.suptitle(
-            f"Порівняння моделей ({scale}): залишковий → надлишковий → оптимальний",
+            f"Порівняння моделей ({scale_name} масштаб): "
+            f"залишковий → надлишковий → оптимальний",
             fontsize=14,
         )
         fig.tight_layout()
@@ -568,6 +578,7 @@ def plot_sse_combinations(
         best_idx: int,
         plot_dir: str,
 ) -> None:
+    """Графік ЗСК для всіх комбінацій M2."""
     fig, ax = plt.subplots(figsize=(14, 6), dpi=200)
 
     x_pos = np.arange(len(sse_values))
@@ -575,9 +586,11 @@ def plot_sse_combinations(
         "red" if i == best_idx else "steelblue" for i in range(len(sse_values))
     ]
     ax.bar(x_pos, sse_values, color=colors, alpha=0.7)
-    ax.set_xlabel("Комбінація M2 компонент", fontsize=12)
-    ax.set_ylabel("SSE (сума квадратів помилок)", fontsize=12)
-    ax.set_title("SSE для часткових описів (M1 + комбінації M2)", fontsize=13)
+    ax.set_xlabel("Комбінація компонент M2", fontsize=12)
+    ax.set_ylabel("ЗСК (залишкова сума квадратів)", fontsize=12)
+    ax.set_title(
+        "ЗСК для часткових описів (M1 + комбінації M2)", fontsize=13
+    )
     ax.set_yscale("log")
     ax.grid(True, alpha=0.3, axis="y")
 
@@ -589,32 +602,32 @@ def plot_sse_combinations(
         ax.set_xticklabels([combo_labels[best_idx]], rotation=45, fontsize=9)
 
     fig.tight_layout()
-    fig.savefig(os.path.join(plot_dir, "sse_combinations.png"))
+    fig.savefig(os.path.join(plot_dir, "зск_комбінації.png"))
     plt.close(fig)
 
 
-# ═══════════════════ MAIN GMDH ALGORITHM ═══════════════════════
+# ═══════════════════ ОСНОВНИЙ АЛГОРИТМ МГУА ═══════════════════════
 
 def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
     """
-    Алгоритм МГУА:
+    Алгоритм МГУА (метод групового урахування аргументів):
 
     1. Дані → дві половини
     2. Для кожної половини: повний опис → кластеризація → M1_i, M2_i
     3. M1 = M1_1 ∩ M1_2;  M2 = все інше
     4. Часткові описи: M1 + комбінації M2
-    5. SSE = SSE_1 + SSE_2 (cross-validation)
-    6. Найкраща формула = argmin SSE
-    7. Фінальна модель тренується НА ВСІХ ДАНИХ, SSE рахується на всіх даних
+    5. ЗСК = ЗСК_1 + ЗСК_2 (перехресна перевірка)
+    6. Найкраща формула = argmin ЗСК
+    7. Фінальна модель тренується НА ВСІХ ДАНИХ, ЗСК рахується на всіх даних
 
-    Повертає (feature_names, coefficients, intercept, sse_full).
+    Повертає (імена_ознак, коефіцієнти, зміщення, зск_повне).
     """
     t_total_start = time.perf_counter()
     log.info("=" * 70)
-    log.info("GMDH ALGORITHM START")
+    log.info("ПОЧАТОК АЛГОРИТМУ МГУА")
     log.info("=" * 70)
 
-    # ── Step 0: Feature matrix ──
+    # ── Крок 0: Матриця ознак ──
     x_df, feature_names = generate_full_feature_matrix(df)
     x_raw = x_df.values
     y = df["ops"].values
@@ -622,11 +635,11 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
     n_samples = len(y)
 
     log.info(
-        "Feature matrix: %d samples × %d features", n_samples, n_features
+        "Матриця ознак: %d спостережень × %d ознак", n_samples, n_features
     )
-    log.info("Features: %s", ", ".join(feature_names))
+    log.info("Ознаки: %s", ", ".join(feature_names))
 
-    # ── Step 1: Split data ──
+    # ── Крок 1: Розбиття даних ──
     rng = np.random.RandomState(42)
     indices = rng.permutation(n_samples)
     split = n_samples // 2
@@ -635,26 +648,29 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
     x_half1, y_half1 = x_raw[idx_1], y[idx_1]
     x_half2, y_half2 = x_raw[idx_2], y[idx_2]
 
-    log.info("Split: half1=%d, half2=%d samples", len(idx_1), len(idx_2))
+    log.info(
+        "Розбиття: половина 1 = %d спостережень, половина 2 = %d спостережень",
+        len(idx_1), len(idx_2),
+    )
 
     # ══════════════════════════════════════════════════════════════
-    # Step 2a: Clustering on HALF-1 (cached)
+    # Крок 2а: Кластеризація на ПОЛОВИНІ-1 (з кешем)
     # ══════════════════════════════════════════════════════════════
-    cache_cluster_1 = _load_cache("step2a_clustering_half1")
+    cache_cluster_1 = _load_cache("крок2а_кластеризація_половина1")
 
     if cache_cluster_1 is not None:
         m1_1_names = cache_cluster_1["m1_names"]
         m2_1_names = cache_cluster_1["m2_names"]
         coefs_1 = cache_cluster_1["coefs"]
-        log.info("Step 2a: LOADED FROM CACHE")
+        log.info("Крок 2а: ЗАВАНТАЖЕНО З КЕШУ")
     else:
         log.info("─" * 50)
-        log.info("Step 2a: Full description on HALF-1, clustering")
+        log.info("Крок 2а: Повний опис на ПОЛОВИНІ-1, кластеризація")
 
         model_full_1 = fit_lsm(x_half1, y_half1)
         coefs_1 = model_full_1.coef_
 
-        log.info("  Full model 1 coefficients:")
+        log.info("  Коефіцієнти повної моделі 1:")
         for name, c in zip(feature_names, coefs_1):
             log.info("    %-25s : %+.6e", name, c)
 
@@ -662,33 +678,33 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
             coefs_1, feature_names, x_half1
         )
 
-        _save_cache("step2a_clustering_half1", {
+        _save_cache("крок2а_кластеризація_половина1", {
             "m1_names": m1_1_names,
             "m2_names": m2_1_names,
             "coefs": coefs_1,
         })
 
-    log.info("  M1_1 (important, half1): %s", m1_1_names)
-    log.info("  M2_1 (rest, half1):      %s", m2_1_names)
+    log.info("  M1_1 (важливі, половина 1): %s", m1_1_names)
+    log.info("  M2_1 (решта, половина 1):    %s", m2_1_names)
 
     # ══════════════════════════════════════════════════════════════
-    # Step 2b: Clustering on HALF-2 (cached)
+    # Крок 2б: Кластеризація на ПОЛОВИНІ-2 (з кешем)
     # ══════════════════════════════════════════════════════════════
-    cache_cluster_2 = _load_cache("step2b_clustering_half2")
+    cache_cluster_2 = _load_cache("крок2б_кластеризація_половина2")
 
     if cache_cluster_2 is not None:
         m1_2_names = cache_cluster_2["m1_names"]
         m2_2_names = cache_cluster_2["m2_names"]
         coefs_2 = cache_cluster_2["coefs"]
-        log.info("Step 2b: LOADED FROM CACHE")
+        log.info("Крок 2б: ЗАВАНТАЖЕНО З КЕШУ")
     else:
         log.info("─" * 50)
-        log.info("Step 2b: Full description on HALF-2, clustering")
+        log.info("Крок 2б: Повний опис на ПОЛОВИНІ-2, кластеризація")
 
         model_full_2 = fit_lsm(x_half2, y_half2)
         coefs_2 = model_full_2.coef_
 
-        log.info("  Full model 2 coefficients:")
+        log.info("  Коефіцієнти повної моделі 2:")
         for name, c in zip(feature_names, coefs_2):
             log.info("    %-25s : %+.6e", name, c)
 
@@ -696,61 +712,61 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
             coefs_2, feature_names, x_half2
         )
 
-        _save_cache("step2b_clustering_half2", {
+        _save_cache("крок2б_кластеризація_половина2", {
             "m1_names": m1_2_names,
             "m2_names": m2_2_names,
             "coefs": coefs_2,
         })
 
-    log.info("  M1_2 (important, half2): %s", m1_2_names)
-    log.info("  M2_2 (rest, half2):      %s", m2_2_names)
+    log.info("  M1_2 (важливі, половина 2): %s", m1_2_names)
+    log.info("  M2_2 (решта, половина 2):    %s", m2_2_names)
 
     # ══════════════════════════════════════════════════════════════
-    # Step 3: Intersection / Union (cached)
+    # Крок 3: Перетин / Об'єднання (з кешем)
     # ══════════════════════════════════════════════════════════════
-    cache_intersection = _load_cache("step3_intersection")
+    cache_intersection = _load_cache("крок3_перетин")
 
     if cache_intersection is not None:
         m1_final = cache_intersection["m1_final"]
         m2_final = cache_intersection["m2_final"]
-        log.info("Step 3: LOADED FROM CACHE")
+        log.info("Крок 3: ЗАВАНТАЖЕНО З КЕШУ")
     else:
         log.info("─" * 50)
-        log.info("Step 3: M1 = intersection, M2 = everything else")
+        log.info("Крок 3: M1 = перетин, M2 = все інше")
 
         m1_final = sorted(set(m1_1_names) & set(m1_2_names))
         m2_final = sorted(set(feature_names) - set(m1_final))
 
-        _save_cache("step3_intersection", {
+        _save_cache("крок3_перетин", {
             "m1_final": m1_final,
             "m2_final": m2_final,
         })
 
-    log.info("  M1 (intersection): %d features: %s", len(m1_final), m1_final)
-    log.info("  M2 (everything else): %d features: %s", len(m2_final), m2_final)
+    log.info("  M1 (перетин): %d ознак: %s", len(m1_final), m1_final)
+    log.info("  M2 (все інше): %d ознак: %s", len(m2_final), m2_final)
 
     if not m1_final:
-        log.warning("  M1 is empty! All features go to M2.")
+        log.warning("  M1 порожній! Усі ознаки потрапляють до M2.")
 
-    # ── Feature indices ──
+    # ── Індекси ознак ──
     m1_indices = [feature_names.index(name) for name in m1_final]
     m2_indices = [feature_names.index(name) for name in m2_final]
 
     # ══════════════════════════════════════════════════════════════
-    # Step 4–5: Evaluate partial descriptions (each combo cached)
+    # Кроки 4–5: Оцінка часткових описів (кожна комбінація кешується)
     # ══════════════════════════════════════════════════════════════
     total_m2_combos = sum(
         math.comb(len(m2_final), r) for r in range(0, len(m2_final) + 1)
     )
     log.info("─" * 50)
     log.info(
-        "Step 4-5: Evaluating %d partial descriptions "
-        "(M1[%d] + combos of M2[%d])",
+        "Кроки 4-5: Оцінка %d часткових описів "
+        "(M1[%d] + комбінації M2[%d])",
         total_m2_combos, len(m1_final), len(m2_final),
     )
 
-    # Try to load completed combo results
-    cache_all_combos = _load_cache("step5_all_combo_results")
+    # Спроба завантажити завершені результати
+    cache_all_combos = _load_cache("крок5_усі_комбінації")
 
     if cache_all_combos is not None:
         sse_values_list = cache_all_combos["sse_values"]
@@ -761,19 +777,19 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
         best_feature_indices = cache_all_combos["best_feature_indices"]
 
         log.info(
-            "Step 4-5: LOADED FROM CACHE (%d combos, best SSE=%.6e)",
+            "Кроки 4-5: ЗАВАНТАЖЕНО З КЕШУ (%d комбінацій, найкраща ЗСК=%.6e)",
             len(sse_values_list), best_sse_cv,
         )
     else:
-        # Check for partially completed combos
-        cache_partial = _load_cache("step5_partial_progress")
+        # Перевірка частково завершених комбінацій
+        cache_partial = _load_cache("крок5_проміжний_прогрес")
         if cache_partial is not None:
             sse_values_list = cache_partial["sse_values"]
             combo_labels_list = cache_partial["combo_labels"]
             combo_indices_list = cache_partial["combo_indices"]
             start_combo = cache_partial["next_combo"]
             log.info(
-                "Step 4-5: Resuming from combo %d / %d",
+                "Кроки 4-5: Продовження з комбінації %d / %d",
                 start_combo, total_m2_combos,
             )
         else:
@@ -784,25 +800,26 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
 
         alpha = 0.1
         combo_count = 0
-        save_interval = max(1, total_m2_combos // 20)  # save ~20 times
+        save_interval = max(1, total_m2_combos // 20)
 
         for r in tqdm(
                 range(0, len(m2_final) + 1),
-                desc="M2 subset sizes",
+                desc="Розміри підмножин M2",
                 ncols=100, position=0,
         ):
-            # for m2_subset in combinations(range(len(m2_final)), r):'
             for m2_subset in tqdm(
                     combinations(range(len(m2_final)), r),
-                    desc=f"Combos of size {r}",
+                    desc=f"Комбінації розміру {r}",
                     ncols=100,
-                    total=len(list(combinations(range(len(m2_final)), r))), position=1,
+                    total=math.comb(len(m2_final), r),
+                    position=1,
+                    leave=False,
             ):
                 if combo_count < start_combo:
                     combo_count += 1
                     continue
 
-                # Feature indices for this partial description
+                # Індекси ознак для цього часткового опису
                 m2_sub_indices = [m2_indices[j] for j in m2_subset]
                 candidate_indices = m1_indices + m2_sub_indices
 
@@ -810,17 +827,17 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
                 if m2_names_in_combo:
                     label = "M1+" + "+".join(m2_names_in_combo)
                 else:
-                    label = "M1 only"
+                    label = "тільки M1"
 
                 if not candidate_indices:
                     sse_values_list.append(float("inf"))
-                    combo_labels_list.append("(empty)")
+                    combo_labels_list.append("(порожній)")
                     combo_indices_list.append([])
                     combo_count += 1
                     continue
 
-                # Check individual combo cache
-                combo_cache_name = f"combo_{combo_count:06d}"
+                # Перевірка кешу окремої комбінації
+                combo_cache_name = f"комбо_{combo_count:06d}"
                 cached_combo = _load_cache(combo_cache_name)
 
                 if cached_combo is not None:
@@ -829,25 +846,23 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
                     x1_sub = x_half1[:, candidate_indices]
                     x2_sub = x_half2[:, candidate_indices]
 
-                    # xn_sub is dataset that
-
-                    # SSE_1: train half1, test half2
+                    # ЗСК_1: тренуємо на половині 1, перевіряємо на половині 2
                     model_1 = fit_lsm(x1_sub, y_half1, alpha=alpha)
                     sse_1 = compute_sse(model_1, x2_sub, y_half2)
 
-                    # SSE_2: train half2, test half1
+                    # ЗСК_2: тренуємо на половині 2, перевіряємо на половині 1
                     model_2 = fit_lsm(x2_sub, y_half2, alpha=alpha)
                     sse_2 = compute_sse(model_2, x1_sub, y_half1)
 
                     sse_total = sse_1 + sse_2
 
                     _save_cache(combo_cache_name, {
-                        "combo_idx": combo_count,
-                        "label": label,
-                        "candidate_indices": candidate_indices,
-                        "sse_1": sse_1,
-                        "sse_2": sse_2,
-                        "sse": sse_total,
+                        "номер_комбінації": combo_count,
+                        "мітка": label,
+                        "індекси_ознак": candidate_indices,
+                        "зск_1": sse_1,
+                        "зск_2": sse_2,
+                        "зск": sse_total,
                     })
 
                 sse_values_list.append(sse_total)
@@ -856,27 +871,27 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
 
                 combo_count += 1
 
-                # Periodic partial save
+                # Періодичне збереження проміжного стану
                 if combo_count % save_interval == 0:
-                    _save_cache("step5_partial_progress", {
+                    _save_cache("крок5_проміжний_прогрес", {
                         "sse_values": sse_values_list,
                         "combo_labels": combo_labels_list,
                         "combo_indices": combo_indices_list,
                         "next_combo": combo_count,
                     })
                     log.debug(
-                        "  Partial progress saved at combo %d / %d",
+                        "  Проміжний стан збережено на комбінації %d / %d",
                         combo_count, total_m2_combos,
                     )
 
-        # Find best
+        # Знаходимо найкращу
         sse_arr = np.array(sse_values_list)
         best_combo_idx = int(np.argmin(sse_arr))
         best_sse_cv = float(sse_arr[best_combo_idx])
         best_feature_indices = combo_indices_list[best_combo_idx]
 
-        # Save completed results
-        _save_cache("step5_all_combo_results", {
+        # Зберігаємо завершені результати
+        _save_cache("крок5_усі_комбінації", {
             "sse_values": sse_values_list,
             "combo_labels": combo_labels_list,
             "combo_indices": combo_indices_list,
@@ -885,28 +900,31 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
             "best_feature_indices": best_feature_indices,
         })
 
-        log.info("Step 4-5 complete: %d combos evaluated", combo_count)
+        log.info("Кроки 4-5 завершено: оцінено %d комбінацій", combo_count)
 
-    log.info("Best CV SSE = %.6e", best_sse_cv)
-    log.info("Best combination: %s", combo_labels_list[best_combo_idx])
+    log.info("Найкраща ЗСК (перехресна перевірка) = %.6e", best_sse_cv)
+    log.info("Найкраща комбінація: %s", combo_labels_list[best_combo_idx])
 
     # ══════════════════════════════════════════════════════════════
-    # Step 6: Final model on ALL data (cached)
+    # Крок 6: Фінальна модель на ВСІХ даних (з кешем)
     # ══════════════════════════════════════════════════════════════
-    cache_final = _load_cache("step6_final_model")
+    cache_final = _load_cache("крок6_фінальна_модель")
 
     if cache_final is not None:
-        best_feature_names = cache_final["feature_names"]
-        final_coefs = cache_final["coefficients"]
-        final_intercept = cache_final["intercept"]
-        sse_full = cache_final["sse_full"]
-        best_feature_indices = cache_final["feature_indices"]
-        m1_in_best = cache_final["m1_in_best"]
-        m2_in_best = cache_final["m2_in_best"]
-        log.info("Step 6: LOADED FROM CACHE (SSE_full=%.6e)", sse_full)
+        best_feature_names = cache_final["імена_ознак"]
+        final_coefs = cache_final["коефіцієнти"]
+        final_intercept = cache_final["зміщення"]
+        sse_full = cache_final["зск_повне"]
+        best_feature_indices = cache_final["індекси_ознак"]
+        m1_in_best = cache_final["m1_у_найкращій"]
+        m2_in_best = cache_final["m2_у_найкращій"]
+        log.info("Крок 6: ЗАВАНТАЖЕНО З КЕШУ (ЗСК_повне=%.6e)", sse_full)
     else:
         log.info("─" * 50)
-        log.info("Step 6: Training final model on ALL %d samples", n_samples)
+        log.info(
+            "Крок 6: Тренування фінальної моделі на ВСІХ %d спостереженнях",
+            n_samples,
+        )
 
         best_feature_names = [feature_names[i] for i in best_feature_indices]
         x_best_full = x_raw[:, best_feature_indices]
@@ -915,68 +933,68 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
         final_coefs = final_model.coef_
         final_intercept = float(final_model.intercept_)
 
-        # SSE on ALL data (single metric)
+        # ЗСК на ВСІХ даних (єдина метрика)
         y_pred_full = final_model.predict(x_best_full)
         sse_full = float(np.sum((y - y_pred_full) ** 2))
 
         m1_in_best = [n for n in m1_final if n in best_feature_names]
         m2_in_best = [n for n in best_feature_names if n not in m1_final]
 
-        _save_cache("step6_final_model", {
-            "feature_names": best_feature_names,
-            "feature_indices": best_feature_indices,
-            "coefficients": final_coefs,
-            "intercept": final_intercept,
-            "sse_full": sse_full,
-            "m1_in_best": m1_in_best,
-            "m2_in_best": m2_in_best,
-            "best_sse_cv": best_sse_cv,
+        _save_cache("крок6_фінальна_модель", {
+            "імена_ознак": best_feature_names,
+            "індекси_ознак": best_feature_indices,
+            "коефіцієнти": final_coefs,
+            "зміщення": final_intercept,
+            "зск_повне": sse_full,
+            "m1_у_найкращій": m1_in_best,
+            "m2_у_найкращій": m2_in_best,
+            "зск_перехресна": best_sse_cv,
         })
 
-    # ── Log formula ──
+    # ── Виведення формули ──
     log.info("=" * 70)
-    log.info("FINAL FORMULA")
+    log.info("ФІНАЛЬНА ФОРМУЛА")
     log.info("=" * 70)
     log.info("")
-    log.info("Best formula = M1 + M2 + bias")
+    log.info("Найкраща формула = M1 + M2 + зміщення")
     log.info("")
-    log.info("M1 (core features from intersection):")
+    log.info("M1 (ядро — ознаки з перетину):")
     for name in m1_in_best:
         idx_in_best = best_feature_names.index(name)
-        log.info("  %+.10e * %s", final_coefs[idx_in_best], name)
+        log.info("  %+.10e × %s", final_coefs[idx_in_best], name)
     log.info("")
-    log.info("M2 (selected from combinations):")
+    log.info("M2 (відібрані з комбінацій):")
     if m2_in_best:
         for name in m2_in_best:
             idx_in_best = best_feature_names.index(name)
-            log.info("  %+.10e * %s", final_coefs[idx_in_best], name)
+            log.info("  %+.10e × %s", final_coefs[idx_in_best], name)
     else:
-        log.info("  (none)")
+        log.info("  (немає)")
     log.info("")
-    log.info("Bias (intercept): %+.10e", final_intercept)
+    log.info("Зміщення (вільний член): %+.10e", final_intercept)
     log.info("")
-    log.info("SSE (full data): %.6e", sse_full)
+    log.info("ЗСК (повні дані): %.6e", sse_full)
 
-    # ── Save model binary ──
+    # ── Збереження бінарного файлу моделі ──
     model_binary = {
-        "features": best_feature_names,
-        "m1_features": m1_in_best,
-        "m2_features": m2_in_best,
-        "coefficients": final_coefs,
-        "intercept": final_intercept,
-        "sse_full": sse_full,
-        "sse_cv": best_sse_cv,
-        "feature_indices": best_feature_indices,
+        "ознаки": best_feature_names,
+        "ознаки_m1": m1_in_best,
+        "ознаки_m2": m2_in_best,
+        "коефіцієнти": final_coefs,
+        "зміщення": final_intercept,
+        "зск_повне": sse_full,
+        "зск_перехресна": best_sse_cv,
+        "індекси_ознак": best_feature_indices,
     }
-    bin_path = os.path.join(PLOTS_DIR, "final_model.bin")
+    bin_path = os.path.join(PLOTS_DIR, "фінальна_модель.bin")
     joblib.dump(model_binary, bin_path)
-    log.info("Model binary saved to %s", bin_path)
+    log.info("Бінарний файл моделі збережено: %s", bin_path)
 
-    # ── Plots ──
+    # ── Графіки ──
     log.info("─" * 50)
-    log.info("Generating scientific plots")
+    log.info("Генерація наукових графіків")
 
-    # --- Predict function: BEST formula (M1 + selected M2 + bias) ---
+    # --- Функція передбачення: НАЙКРАЩА формула ---
     def predict_best(m_in, n_in):
         temp_df = pd.DataFrame({
             "m": np.asarray(m_in).flatten(),
@@ -989,7 +1007,7 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
         model_tmp.intercept_ = final_intercept
         return model_tmp.predict(x_sub_tmp)
 
-    # --- Predict function: M1 only + bias (залишковий опис) ---
+    # --- Функція передбачення: тільки M1 + зміщення (залишковий опис) ---
     if m1_indices:
         x_m1_full = x_raw[:, m1_indices]
         model_m1_only = fit_lsm(x_m1_full, y, alpha=0.1)
@@ -1005,7 +1023,7 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
     else:
         predict_m1_only = None
 
-    # --- Predict function: M1 + ALL M2 + bias (надлишковий опис) ---
+    # --- Функція передбачення: M1 + усі M2 + зміщення (надлишковий опис) ---
     all_indices = m1_indices + m2_indices
     x_all_full = x_raw[:, all_indices]
     model_all = fit_lsm(x_all_full, y, alpha=0.1)
@@ -1020,7 +1038,7 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
         return model_all.predict(x_sub_tmp)
 
     plot_model_vs_data(
-        df, predict_best, plot_dir=PLOTS_DIR, model_name="GMDH",
+        df, predict_best, plot_dir=PLOTS_DIR, model_name="МГУА",
         predict_m1_only=predict_m1_only,
         predict_m1_m2_all=predict_m1_m2_all,
     )
@@ -1030,53 +1048,53 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
 
     t_total = time.perf_counter() - t_total_start
     log.info("=" * 70)
-    log.info("GMDH COMPLETE. Total time: %.3f s", t_total)
+    log.info("МГУА ЗАВЕРШЕНО. Загальний час: %.3f с", t_total)
     log.info("=" * 70)
 
     return best_feature_names, final_coefs, final_intercept, sse_full
 
 
-# ═══════════════════════════ MAIN ══════════════════════════════
+# ═══════════════════════════ ГОЛОВНА ФУНКЦІЯ ══════════════════════════════
 
 def main() -> None:
     t0 = time.perf_counter()
-    log.info("Execution started")
+    log.info("Початок виконання")
 
     df = load_data()
     if df.empty:
-        log.error('No data found in cache directory "%s"', CACHE_DIR)
+        log.error('Дані не знайдено в директорії кешу "%s"', CACHE_DIR)
         return
 
-    log.info("Loaded %d data points", len(df))
+    log.info("Завантажено %d спостережень", len(df))
 
     try:
         names, coefs, intercept, sse_full = run_gmdh(df)
 
-        # Write formula file
+        # Запис формули у файл
         lines = [
-            "Best formula = M1 + M2 + bias",
+            "Найкраща формула = M1 + M2 + зміщення",
             "",
-            "Full formula:",
+            "Повна формула:",
         ]
         for w, n in zip(coefs, names):
-            lines.append(f"  {w:+.16e} * [{n}]")
-        lines.append(f"  {intercept:+.16e}  (bias)")
+            lines.append(f"  {w:+.16e} × [{n}]")
+        lines.append(f"  {intercept:+.16e}  (зміщення / вільний член)")
         lines.append("")
-        lines.append(f"SSE (full data): {sse_full:.6e}")
+        lines.append(f"ЗСК (повні дані): {sse_full:.6e}")
 
         equation = "\n".join(lines)
-        log.info("Final model:\n%s", equation)
+        log.info("Фінальна модель:\n%s", equation)
 
-        formula_path = os.path.join(PLOTS_DIR, "final_formula.txt")
+        formula_path = os.path.join(PLOTS_DIR, "фінальна_формула.txt")
         with open(formula_path, "w", encoding="utf-8") as fh:
             fh.write(equation)
-        log.info("Formula written to %s", formula_path)
+        log.info("Формулу записано до %s", formula_path)
 
     except Exception:
-        log.exception("Critical execution error")
+        log.exception("Критична помилка виконання")
 
     elapsed = time.perf_counter() - t0
-    log.info("Total wall-clock time: %.3f s", elapsed)
+    log.info("Загальний час виконання: %.3f с", elapsed)
 
 
 if __name__ == "__main__":
