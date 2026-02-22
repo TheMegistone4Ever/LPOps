@@ -562,6 +562,37 @@ def plot_model_vs_data(
         plt.close(fig)
 
 
+def plot_sse_combinations(
+        sse_values: List[float],
+        combo_labels: List[str],
+        best_idx: int,
+        plot_dir: str,
+) -> None:
+    fig, ax = plt.subplots(figsize=(14, 6), dpi=200)
+
+    x_pos = np.arange(len(sse_values))
+    colors = [
+        "red" if i == best_idx else "steelblue" for i in range(len(sse_values))
+    ]
+    ax.bar(x_pos, sse_values, color=colors, alpha=0.7)
+    ax.set_xlabel("Комбінація M2 компонент", fontsize=12)
+    ax.set_ylabel("SSE (сума квадратів помилок)", fontsize=12)
+    ax.set_title("SSE для часткових описів (M1 + комбінації M2)", fontsize=13)
+    ax.set_yscale("log")
+    ax.grid(True, alpha=0.3, axis="y")
+
+    if len(combo_labels) <= 30:
+        ax.set_xticks(x_pos)
+        ax.set_xticklabels(combo_labels, rotation=90, fontsize=7)
+    else:
+        ax.set_xticks([best_idx])
+        ax.set_xticklabels([combo_labels[best_idx]], rotation=45, fontsize=9)
+
+    fig.tight_layout()
+    fig.savefig(os.path.join(plot_dir, "sse_combinations.png"))
+    plt.close(fig)
+
+
 # ═══════════════════ MAIN GMDH ALGORITHM ═══════════════════════
 
 def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
