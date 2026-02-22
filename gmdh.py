@@ -572,40 +572,6 @@ def plot_model_vs_data(
         plt.close(fig)
 
 
-def plot_sse_combinations(
-        sse_values: List[float],
-        combo_labels: List[str],
-        best_idx: int,
-        plot_dir: str,
-) -> None:
-    """Графік ЗСК для всіх комбінацій M2."""
-    fig, ax = plt.subplots(figsize=(14, 6), dpi=200)
-
-    x_pos = np.arange(len(sse_values))
-    colors = [
-        "red" if i == best_idx else "steelblue" for i in range(len(sse_values))
-    ]
-    ax.bar(x_pos, sse_values, color=colors, alpha=0.7)
-    ax.set_xlabel("Комбінація компонент M2", fontsize=12)
-    ax.set_ylabel("ЗСК (залишкова сума квадратів)", fontsize=12)
-    ax.set_title(
-        "ЗСК для часткових описів (M1 + комбінації M2)", fontsize=13
-    )
-    ax.set_yscale("log")
-    ax.grid(True, alpha=0.3, axis="y")
-
-    if len(combo_labels) <= 30:
-        ax.set_xticks(x_pos)
-        ax.set_xticklabels(combo_labels, rotation=90, fontsize=7)
-    else:
-        ax.set_xticks([best_idx])
-        ax.set_xticklabels([combo_labels[best_idx]], rotation=45, fontsize=9)
-
-    fig.tight_layout()
-    fig.savefig(os.path.join(plot_dir, "зск_комбінації.png"))
-    plt.close(fig)
-
-
 # ═══════════════════ ОСНОВНИЙ АЛГОРИТМ МГУА ═══════════════════════
 
 def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
@@ -1041,9 +1007,6 @@ def run_gmdh(df: pd.DataFrame) -> Tuple[List[str], np.ndarray, float, float]:
         df, predict_best, plot_dir=PLOTS_DIR, model_name="МГУА",
         predict_m1_only=predict_m1_only,
         predict_m1_m2_all=predict_m1_m2_all,
-    )
-    plot_sse_combinations(
-        sse_values_list, combo_labels_list, best_combo_idx, PLOTS_DIR
     )
 
     t_total = time.perf_counter() - t_total_start
