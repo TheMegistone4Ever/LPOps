@@ -125,12 +125,10 @@ def main():
 
     log.info(f"Згенеровано початкових ознак: {len(feature_names)}")
 
-    # Симуляція спліту з gmdh.py
-    rng = np.random.RandomState(42)
+    rng = np.random.RandomState(1810)
     indices = rng.permutation(len(y))
     idx_1, idx_2 = indices[:len(y) // 2], indices[len(y) // 2:]
 
-    # Кластеризація обох половин
     m1_1 = cluster_half(X_raw[idx_1], y[idx_1], feature_names)
     m1_2 = cluster_half(X_raw[idx_2], y[idx_2], feature_names)
     m1_final = sorted(set(m1_1) & set(m1_2))
