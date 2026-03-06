@@ -63,15 +63,15 @@ log = configure_logging()
 
 if IS_BENCHMARKING:
     def _f_bench_m3(m, n):
-        return m ** 3.0
+        return m ** 3.
 
 
     def _f_bench_n2(m, n):
-        return n ** 2.0
+        return n ** 2.
 
 
     def _f_bench_lnm(m, n):
-        return np.log(np.where(m > 1.0, m, 1.1))
+        return np.log(np.where(m > 1., m, 1.1))
 
 
     BASIS_FUNCTIONS = {
@@ -93,11 +93,11 @@ else:
 
 
     def _safe_log(n):
-        return np.where(n > 1, np.log(n), 0.0)
+        return np.where(n > 1, np.log(n), 0.)
 
 
     def _f_general(m, n):
-        return 0.63 * m ** 2.96 * n ** 0.02 * _safe_log(n) ** 1.62 + 4.04 * m ** (-4.11) * n ** 2.92
+        return .63 * m ** 2.96 * n ** .02 * _safe_log(n) ** 1.62 + 4.04 * m ** (-4.11) * n ** 2.92
 
 
     def _f_adler_megiddo(_, n):
@@ -151,7 +151,7 @@ def load_data() -> pd.DataFrame:
                     f1 = m ** 3.
                     f2 = n ** 2.
 
-                    y_ideal = 150.0 + (f1 * f2)
+                    y_ideal = 150. + (f1 * f2)
 
                     noise_std = BENCHMARK_NOISE_PERCENT * y_ideal
                     ops = y_ideal + np.random.normal(0, noise_std)
@@ -390,13 +390,13 @@ def _predict_model(m_arr, n_arr, indices, coefs, intercept):
 
 
 def _plot_scatter_pred(ax, y_true, y_pred, title):
-    ax.scatter(y_true, y_pred, alpha=0.3, s=8)
+    ax.scatter(y_true, y_pred, alpha=.3, s=8)
     lims = [min(y_true.min(), y_pred.min()), max(y_true.max(), y_pred.max())]
     ax.plot(lims, lims, "r--", lw=2)
     ax.set_xlabel("Реальні значення")
     ax.set_ylabel("Прогноз")
     ax.set_title(title)
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, alpha=.3)
 
 
 def plot_models(df, m1_indices, best_indices, m1_coefs, full_coefs, m1_intercept, full_intercept):
@@ -417,13 +417,13 @@ def plot_models(df, m1_indices, best_indices, m1_coefs, full_coefs, m1_intercept
             for n_val in n_vals:
                 subset = df[df["n"] == n_val]
                 box_data = [subset[subset["m"] == mv]["ops"].values for mv in m_vals]
-                bp = ax.boxplot(box_data, positions=m_vals, widths=0.6, patch_artist=True, showfliers=False)
+                bp = ax.boxplot(box_data, positions=m_vals, widths=.6, patch_artist=True, showfliers=False)
                 for box in bp["boxes"]:
                     box.set(facecolor="lightblue")
                 for median in bp["medians"]:
                     median.set(color="red", linewidth=2)
                 avg_ops = subset.groupby("m")["ops"].mean()
-                ax.plot(avg_ops.index, avg_ops.values, "k-", linewidth=1, alpha=0.7)
+                ax.plot(avg_ops.index, avg_ops.values, "k-", linewidth=1, alpha=.7)
                 m_range = np.linspace(min(m_vals), max(m_vals), 100)
                 fit_vals = _predict_model(m_range, np.full_like(m_range, n_val), m_idx, m_coefs, m_intercept)
                 ax.plot(m_range, fit_vals, "--", label=f"n={int(n_val)}")
@@ -432,20 +432,20 @@ def plot_models(df, m1_indices, best_indices, m1_coefs, full_coefs, m1_intercept
             ax.set_title(f"{model_title} — залежність від m")
             if scale == "log":
                 ax.set_yscale("log")
-            ax.grid(True, alpha=0.2)
+            ax.grid(True, alpha=.2)
             ax.legend(fontsize=7)
 
             ax = axes[1]
             for m_val in m_vals:
                 subset = df[df["m"] == m_val]
                 box_data = [subset[subset["n"] == nv]["ops"].values for nv in n_vals]
-                bp = ax.boxplot(box_data, positions=n_vals, widths=0.6, patch_artist=True, showfliers=False)
+                bp = ax.boxplot(box_data, positions=n_vals, widths=.6, patch_artist=True, showfliers=False)
                 for box in bp["boxes"]:
                     box.set(facecolor="lightblue")
                 for median in bp["medians"]:
                     median.set(color="red", linewidth=2)
                 avg_ops = subset.groupby("n")["ops"].mean()
-                ax.plot(avg_ops.index, avg_ops.values, "k-", linewidth=1, alpha=0.7)
+                ax.plot(avg_ops.index, avg_ops.values, "k-", linewidth=1, alpha=.7)
                 n_range = np.linspace(min(n_vals), max(n_vals), 100)
                 fit_vals = _predict_model(np.full_like(n_range, m_val), n_range, m_idx, m_coefs, m_intercept)
                 ax.plot(n_range, fit_vals, "--", label=f"m={int(m_val)}")
@@ -454,7 +454,7 @@ def plot_models(df, m1_indices, best_indices, m1_coefs, full_coefs, m1_intercept
             ax.set_title(f"{model_title} — залежність від n")
             if scale == "log":
                 ax.set_yscale("log")
-            ax.grid(True, alpha=0.2)
+            ax.grid(True, alpha=.2)
             ax.legend(fontsize=7)
 
             fig.tight_layout()
@@ -480,7 +480,7 @@ def plot_models(df, m1_indices, best_indices, m1_coefs, full_coefs, m1_intercept
 
             fig = plt.figure(figsize=(16, 12), dpi=150)
             ax = fig.add_subplot(111, projection="3d")
-            surf = ax.plot_surface(m_grid, n_grid, ops_grid, cmap="viridis", alpha=0.7)
+            surf = ax.plot_surface(m_grid, n_grid, ops_grid, cmap="viridis", alpha=.7)
             ax.scatter(m_data_3d, n_data_3d, ops_data_3d, c="red", marker="o", s=20)
             ax.set_xlabel("m")
             ax.set_ylabel("n")
@@ -530,7 +530,7 @@ def run_gmdh(df: pd.DataFrame):
     x_raw = x_df.values
     y = df["ops"].values
     n_features = len(feature_names)
-    alpha = 0.1
+    alpha = .1
 
     log.info("Матриця ознак: %d зразків x %d ознак", x_raw.shape[0], n_features)
     log.info("Ознаки: %s", ", ".join(feature_names))
