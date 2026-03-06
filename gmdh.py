@@ -18,10 +18,20 @@ from tqdm import tqdm
 
 warnings.filterwarnings("ignore")
 
+IS_BENCHMARKING = True
+BENCHMARK_NOISE_PERCENT = .03
+
 CACHE_DIR = "cache"
-GMDH_CACHE_DIR = "gmdh_cache"
-PLOTS_DIR = "plots_combi"
-LOG_FILE = "gmdh_execution.log"
+
+if IS_BENCHMARKING:
+    GMDH_CACHE_DIR = "gmdh_cache_benchmark"
+    PLOTS_DIR = "plots_combi_benchmark"
+    LOG_FILE = "gmdh_execution_benchmark.log"
+else:
+    GMDH_CACHE_DIR = "gmdh_cache"
+    PLOTS_DIR = "plots_combi"
+    LOG_FILE = "gmdh_execution.log"
+
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float64
 BATCH_SIZE = 4096
@@ -51,43 +61,61 @@ def configure_logging() -> logging.Logger:
 
 log = configure_logging()
 
-
-def _f_refined(m, n):
-    return (m ** 3) * (n ** 2)
-
-
-def _f_smoothed(m, n):
-    return m * (n ** 5) * np.log(np.where(n > 1, n, 1.1))
+if IS_BENCHMARKING:
+    def _f_bench_m3(m, n):
+        return m ** 3.0
 
 
-def _f_poly_mn(m, n):
-    return m * n
+    def _f_bench_n2(m, n):
+        return n ** 2.0
 
 
-def _safe_log(n):
-    return np.where(n > 1, np.log(n), 0.0)
+    def _f_bench_lnm(m, n):
+        return np.log(np.where(m > 1.0, m, 1.1))
 
 
-def _f_general(m, n):
-    return 0.63 * m ** 2.96 * n ** 0.02 * _safe_log(n) ** 1.62 + 4.04 * m ** (-4.11) * n ** 2.92
+    BASIS_FUNCTIONS = {
+        "m3": _f_bench_m3,
+        "n2": _f_bench_n2,
+        "lnm": _f_bench_lnm,
+    }
+else:
+    def _f_refined(m, n):
+        return (m ** 3) * (n ** 2)
 
 
-def _f_adler_megiddo(_, n):
-    return n ** 4
+    def _f_smoothed(m, n):
+        return m * (n ** 5) * np.log(np.where(n > 1, n, 1.1))
 
 
-def _f_log_n_log_m(m, n):
-    return np.log(np.where(m > 1, m, 1.1)) + np.log(np.where(n > 1, n, 1.1))
+    def _f_poly_mn(m, n):
+        return m * n
 
 
-BASIS_FUNCTIONS = {
-    "m3n2": _f_refined,
-    "mn5lnn": _f_smoothed,
-    "poly_mn": _f_poly_mn,
-    "general": _f_general,
-    "adler_megiddo": _f_adler_megiddo,
-    "log_n_log_m": _f_log_n_log_m,
-}
+    def _safe_log(n):
+        return np.where(n > 1, np.log(n), 0.0)
+
+
+    def _f_general(m, n):
+        return 0.63 * m ** 2.96 * n ** 0.02 * _safe_log(n) ** 1.62 + 4.04 * m ** (-4.11) * n ** 2.92
+
+
+    def _f_adler_megiddo(_, n):
+        return n ** 4
+
+
+    def _f_log_n_log_m(m, n):
+        return np.log(np.where(m > 1, m, 1.1)) + np.log(np.where(n > 1, n, 1.1))
+
+
+    BASIS_FUNCTIONS = {
+        "m3n2": _f_refined,
+        "mn5lnn": _f_smoothed,
+        "poly_mn": _f_poly_mn,
+        "general": _f_general,
+        "adler_megiddo": _f_adler_megiddo,
+        "log_n_log_m": _f_log_n_log_m,
+    }
 
 
 def build_feature_matrix(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
@@ -112,6 +140,25 @@ def build_feature_matrix(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
 
 
 def load_data() -> pd.DataFrame:
+    if IS_BENCHMARKING:
+        np.random.seed(1810)
+        m_vals = np.arange(10, 110, 10).astype(float)
+        n_vals = np.arange(10, 110, 10).astype(float)
+        data = list()
+        for m in m_vals:
+            for n in n_vals:
+                for _ in range(5):
+                    f1 = m ** 3.
+                    f2 = n ** 2.
+
+                    y_ideal = 150.0 + (f1 * f2)
+
+                    noise_std = BENCHMARK_NOISE_PERCENT * y_ideal
+                    ops = y_ideal + np.random.normal(0, noise_std)
+                    data.append([m, n, ops])
+        df = pd.DataFrame(data, columns=["m", "n", "ops"])
+        return df[df["ops"] > 0]
+
     if not os.path.exists(CACHE_DIR):
         return pd.DataFrame()
     all_data = list()
@@ -207,32 +254,49 @@ def solve_lsm_single(indices, xt_x, xt_y, x_test_t, y_test, alpha):
 
 
 @torch.no_grad()
-def solve_and_cluster(x_data, y_data, feature_names, alpha):
+def solve_and_cluster(x_data, y_data, feature_names, alpha, normalise: bool = True):
     n_feat = len(feature_names)
+    n_samples = x_data.shape[0]
 
-    stds = np.std(x_data, axis=0)
-    stds[stds < 1e-15] = 1e-15
+    if normalise:
+        stds = np.std(x_data, axis=0)
+        stds[stds < 1e-15] = 1e-15
+    else:
+        stds = np.ones(n_feat, dtype=float)
     x_norm = x_data / stds
 
     x_t = torch.tensor(x_norm, dtype=DTYPE, device=DEVICE)
     y_t = torch.tensor(y_data, dtype=DTYPE, device=DEVICE).unsqueeze(1)
-    xt_x = x_t.T @ x_t
-    xt_y = x_t.T @ y_t
+
+    ones = torch.ones(n_samples, 1, dtype=DTYPE, device=DEVICE)
+    x_aug = torch.cat([x_t, ones], dim=1)
+
+    xt_x = x_aug.T @ x_aug
+    xt_y = x_aug.T @ y_t
+
+    eye = torch.eye(n_feat + 1, device=DEVICE, dtype=DTYPE)
+    eye[-1, -1] = 0.
+
     a = xt_x.clone()
-    a.add_(torch.eye(n_feat, device=DEVICE, dtype=DTYPE), alpha=alpha)
+    a.add_(eye, alpha=alpha)
+
     w = _torch_solve_single(a, xt_y)
-    std_coefs = w.cpu().numpy().flatten()
+
+    w_np = w.cpu().numpy().flatten()
+
+    std_coefs = w_np[:-1]
+
     raw_coefs = std_coefs / stds
 
-    del x_t, y_t, xt_x, xt_y, a, w
+    del x_t, y_t, ones, x_aug, xt_x, xt_y, a, w
     torch.cuda.empty_cache()
 
     abs_std = np.abs(std_coefs)
     order = np.argsort(-abs_std)
 
-    log.info("Стандартизовані коефіцієнти (масштаб-інваріантні):")
+    log.info(f"Коефіцієнти (norm={normalise}, з урахуванням Bias):")
     for rank, i in enumerate(order):
-        log.info("  #%d %s: raw=%.4e, std_coef=%.4e, |std|=%.4e, std(x)=%.4e",
+        log.info("\t#%d %s: raw=%.4e, std_coef=%.4e, |std|=%.4e, std(x)=%.4e",
                  rank + 1, feature_names[i], raw_coefs[i], std_coefs[i], abs_std[i], stds[i])
 
     sorted_abs = abs_std[order]
@@ -470,8 +534,7 @@ def run_gmdh(df: pd.DataFrame):
 
     log.info("Матриця ознак: %d зразків x %d ознак", x_raw.shape[0], n_features)
     log.info("Ознаки: %s", ", ".join(feature_names))
-
-    rng = np.random.RandomState(42)
+    rng = np.random.RandomState(1810)
     indices = rng.permutation(len(y))
     split = len(y) // 2
     idx_1, idx_2 = indices[:split], indices[split:]
