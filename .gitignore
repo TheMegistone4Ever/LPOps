@@ -1,7 +1,6 @@
 # User-defined directories and files
-plots*/
-*cache/
-*.pkl
+plots_combi*/
+*cache*/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
