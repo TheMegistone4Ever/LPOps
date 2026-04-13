@@ -8,6 +8,10 @@
       <excludeFolder url="file://$MODULE_DIR$/gmdh_cache" />
       <excludeFolder url="file://$MODULE_DIR$/gmdh_cache_benchmark" />
       <excludeFolder url="file://$MODULE_DIR$/plots_combi_benchmark" />
+      <excludeFolder url="file://$MODULE_DIR$/gmdh_cache_fixed" />
+      <excludeFolder url="file://$MODULE_DIR$/plots_combi_fixed" />
+      <excludeFolder url="file://$MODULE_DIR$/gmdh_cache_benchmark_fixed" />
+      <excludeFolder url="file://$MODULE_DIR$/plots_combi_benchmark_fixed" />
     </content>
     <orderEntry type="jdk" jdkName="Python 3.14 (LPOps)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
