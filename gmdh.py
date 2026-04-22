@@ -16,21 +16,12 @@ import pandas as pd
 import torch
 from tqdm import tqdm
 
+from gmdh_utils import (IS_BENCHMARKING, BENCHMARK_NOISE_PERCENT, IS_VARIANCE_FIX, CHECK_VAR, CACHE_DIR,
+                        SYNTH_X_DISTRIBUTION, SYNTH_ERROR_DISTRIBUTION, get_gmdh_paths)
+
 warnings.filterwarnings("ignore")
 
-IS_BENCHMARKING = True
-BENCHMARK_NOISE_PERCENT = .03
-
-CACHE_DIR = "cache"
-
-if IS_BENCHMARKING:
-    GMDH_CACHE_DIR = "gmdh_cache_benchmark"
-    PLOTS_DIR = "plots_combi_benchmark"
-    LOG_FILE = "gmdh_execution_benchmark.log"
-else:
-    GMDH_CACHE_DIR = "gmdh_cache"
-    PLOTS_DIR = "plots_combi"
-    LOG_FILE = "gmdh_execution.log"
+GMDH_CACHE_DIR, PLOTS_DIR, LOG_FILE = get_gmdh_paths(IS_BENCHMARKING, IS_VARIANCE_FIX)
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 DTYPE = torch.float64
@@ -61,67 +52,92 @@ def configure_logging() -> logging.Logger:
 
 log = configure_logging()
 
-if IS_BENCHMARKING:
-    def _f_bench_m3(m, n):
-        return m ** 3.
+
+def _f_bench_m3(m, n):
+    return m ** 3.
 
 
-    def _f_bench_n2(m, n):
-        return n ** 2.
+def _f_bench_n2(m, n):
+    return n ** 2.
 
 
-    def _f_bench_lnm(m, n):
-        return np.log(np.where(m > 1., m, 1.1))
+def _f_bench_lnm(m, n):
+    return np.log(np.where(m > 1., m, 1.1))
 
 
-    BASIS_FUNCTIONS = {
-        "m3": _f_bench_m3,
-        "n2": _f_bench_n2,
-        "lnm": _f_bench_lnm,
-    }
-else:
-    def _f_refined(m, n):
-        return (m ** 3) * (n ** 2)
+BASIS_FUNCTIONS_BENCH = {
+    "m3": _f_bench_m3,
+    "n2": _f_bench_n2,
+    "lnm": _f_bench_lnm,
+}
 
 
-    def _f_smoothed(m, n):
-        return m * (n ** 5) * np.log(np.where(n > 1, n, 1.1))
+def _f_refined(m, n):
+    return (m ** 3) * (n ** 2)
 
 
-    def _f_poly_mn(m, n):
-        return m * n
+def _f_smoothed(m, n):
+    return m * (n ** 5) * np.log(np.where(n > 1, n, 1.1))
 
 
-    def _safe_log(n):
-        return np.where(n > 1, np.log(n), 0.)
+def _f_poly_mn(m, n):
+    return m * n
 
 
-    def _f_general(m, n):
-        return .63 * m ** 2.96 * n ** .02 * _safe_log(n) ** 1.62 + 4.04 * m ** (-4.11) * n ** 2.92
+def _safe_log(n):
+    return np.where(n > 1, np.log(n), 0.)
 
 
-    def _f_adler_megiddo(_, n):
-        return n ** 4
+def _f_general(m, n):
+    return .63 * m ** 2.96 * n ** .02 * _safe_log(n) ** 1.62 + 4.04 * m ** (-4.11) * n ** 2.92
 
 
-    def _f_log_n_log_m(m, n):
-        return np.log(np.where(m > 1, m, 1.1)) + np.log(np.where(n > 1, n, 1.1))
+def _f_adler_megiddo(_, n):
+    return n ** 4
 
 
-    BASIS_FUNCTIONS = {
-        "m3n2": _f_refined,
-        "mn5lnn": _f_smoothed,
-        "poly_mn": _f_poly_mn,
-        "general": _f_general,
-        "adler_megiddo": _f_adler_megiddo,
-        "log_n_log_m": _f_log_n_log_m,
-    }
+def _f_log_n_log_m(m, n):
+    return np.log(np.where(m > 1, m, 1.1)) + np.log(np.where(n > 1, n, 1.1))
+
+
+BASIS_FUNCTIONS_CLASSIC = {
+    "m3n2": _f_refined,
+    "mn5lnn": _f_smoothed,
+    "poly_mn": _f_poly_mn,
+    "general": _f_general,
+    "adler_megiddo": _f_adler_megiddo,
+    "log_n_log_m": _f_log_n_log_m,
+}
+
+
+def _sample_distribution(distribution: str, size, scale: float):
+    dist = distribution.strip().lower()
+
+    if dist == "normal":
+        return np.random.normal(loc=0., scale=scale, size=size)
+    if dist == "laplace":
+        return np.random.laplace(loc=0., scale=scale, size=size)
+    if dist == "uniform":
+        return np.random.uniform(-scale, scale, size=size)
+    if dist == "normal_uniform":
+        return np.random.normal(loc=0., scale=scale, size=size) + np.random.uniform(-scale, scale, size=size)
+
+    raise ValueError(
+        f"Непідтримуваний розподіл \"{distribution}\". "
+        f"Доступні: normal, laplace, uniform, normal_uniform."
+    )
 
 
 def build_feature_matrix(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+    if CHECK_VAR:
+        feature_cols = [c for c in df.columns if c.startswith("x")]
+        return df[feature_cols], feature_cols
+
     m = df["m"].values
     n = df["n"].values
-    base = {name: func(m, n) for name, func in BASIS_FUNCTIONS.items()}
+    funcs = BASIS_FUNCTIONS_BENCH if IS_BENCHMARKING else BASIS_FUNCTIONS_CLASSIC
+
+    base = {name: func(m, n) for name, func in funcs.items()}
     base_names = list(base.keys())
     data = dict()
     names = list()
@@ -139,8 +155,88 @@ def build_feature_matrix(df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
     return pd.DataFrame(data), names
 
 
+y_ideal_copy = None
+
+
 def load_data() -> pd.DataFrame:
-    if IS_BENCHMARKING:
+    global y_ideal_copy
+
+    if CHECK_VAR:
+        log.info("=" * 60)
+        log.info("ГЕНЕРАЦІЯ ДАНИХ")
+        np.random.seed(285)
+
+        n_true = 5
+        n_garbage = 13
+        n_features = n_true + n_garbage
+
+        n_samples = 500
+
+        true_coefs = np.array([3., 4., 5., 6., 7.])
+        all_coefs = np.concatenate((true_coefs, np.zeros(n_garbage)))
+        intercept = .5
+
+        log.info("Розподіл X: %s", SYNTH_X_DISTRIBUTION)
+        log.info("Розподіл похибки: %s", SYNTH_ERROR_DISTRIBUTION)
+
+        x_scale = 10.
+        X = np.asarray(_sample_distribution(SYNTH_X_DISTRIBUTION, size=(n_samples, n_features), scale=x_scale))
+        y_ideal = X @ all_coefs + intercept
+        y_ideal_copy = y_ideal.copy()
+
+        mean_y = np.mean(np.abs(y_ideal))
+
+        noise_ratio = 3.
+        target_noise_mean = mean_y * noise_ratio
+        std_dev = target_noise_mean * np.sqrt(math.pi / 2.)
+
+        error_scale_map = {
+            "laplace": target_noise_mean,
+            "normal": std_dev,
+            "uniform": 2. * target_noise_mean,
+            "normal_uniform": target_noise_mean,
+        }
+        error_dist = SYNTH_ERROR_DISTRIBUTION.strip().lower()
+        if error_dist not in error_scale_map:
+            raise ValueError(
+                f"Непідтримуваний розподіл похибки \"{SYNTH_ERROR_DISTRIBUTION}\". "
+                f"Доступні: {", ".join(error_scale_map.keys())}."
+            )
+        errors = _sample_distribution(
+            SYNTH_ERROR_DISTRIBUTION,
+            size=n_samples,
+            scale=float(error_scale_map[error_dist]),
+        )
+        errors = np.asarray(errors)
+        mean_err = np.mean(np.abs(errors))
+        y = y_ideal + errors
+
+        log.info(f"Параметри згенерованої задачі:")
+        log.info(f"  Об`єм вибірки: {n_samples} точок (Уникаємо сингулярності)")
+        log.info(f"  Ідеальне середнє |Z|: {mean_y:.2f}")
+        log.info(f"  Середнє значення похибки |ε|: {mean_err:.2f}")
+        log.info(f"  Відношення (Шум / Сигнал): {mean_err / mean_y:.2f}")
+        log.info("=" * 60)
+
+        log.info("Перші та останні 10 згенерованих точок (x1..xN та ops):")
+        for i in range(10):
+            log.info(f"  {i + 1:3d}: " + ", ".join(
+                [f"x{j + 1}={X[i, j]:.2f}" for j in range(n_features)]) + f", ops={y[i]:.2f}")
+        for i in range(-10, 0):
+            log.info(f"  {n_samples + i + 1:3d}: " + ", ".join(
+                [f"x{j + 1}={X[i, j]:.2f}" for j in range(n_features)]) + f", ops={y[i]:.2f}")
+
+        log.info("Перші та останні 10 значень ідеального результату (Z) та похибки (ε):")
+        for i in range(10):
+            log.info(f"  {i + 1:3d}: Z={y_ideal[i]:.2f}, ε={errors[i]:.2f}")
+        for i in range(-10, 0):
+            log.info(f"  {n_samples + i + 1:3d}: Z={y_ideal[i]:.2f}, ε={errors[i]:.2f}")
+
+        df = pd.DataFrame(X, columns=[f"x{i + 1}" for i in range(n_features)])
+        df["ops"] = y
+        return df
+
+    elif IS_BENCHMARKING:
         np.random.seed(1810)
         m_vals = np.arange(10, 110, 10).astype(float)
         n_vals = np.arange(10, 110, 10).astype(float)
@@ -148,37 +244,34 @@ def load_data() -> pd.DataFrame:
         for m in m_vals:
             for n in n_vals:
                 for _ in range(5):
-                    f1 = m ** 3.
-                    f2 = n ** 2.
-
-                    y_ideal = 150. + (f1 * f2)
-
+                    y_ideal = 10 ** 5 + m ** 3. * n ** 2.
                     noise_std = BENCHMARK_NOISE_PERCENT * y_ideal
-                    ops = y_ideal + np.random.normal(0, noise_std)
+                    ops = y_ideal + np.random.normal(0, noise_std)  # TODO: SELECTION
                     data.append([m, n, ops])
         df = pd.DataFrame(data, columns=["m", "n", "ops"])
         return df[df["ops"] > 0]
 
-    if not os.path.exists(CACHE_DIR):
-        return pd.DataFrame()
-    all_data = list()
-    files = [f for f in os.listdir(CACHE_DIR) if f.endswith(".pkl")]
-    for function_name in tqdm(files, desc="Завантаження кешу", ncols=100):
-        try:
-            with open(os.path.join(CACHE_DIR, function_name), "rb") as fh:
-                data = pickle.load(fh)
-                if not data:
-                    continue
-                if isinstance(data, list) and len(data) > 3:
-                    all_data.extend(data)
-                elif isinstance(data, (list, tuple)) and len(data) == 3:
-                    all_data.append(list(data))
-        except (pickle.UnpicklingError, EOFError):
-            continue
-    if not all_data:
-        return pd.DataFrame()
-    df = pd.DataFrame(all_data, columns=["m", "n", "ops"]).drop_duplicates().astype(float)
-    return df[df["ops"] > 0]
+    else:
+        if not os.path.exists(CACHE_DIR):
+            return pd.DataFrame()
+        all_data = list()
+        files = [f for f in os.listdir(CACHE_DIR) if f.endswith(".pkl")]
+        for function_name in tqdm(files, desc="Завантаження кешу", ncols=100):
+            try:
+                with open(os.path.join(CACHE_DIR, function_name), "rb") as fh:
+                    data = pickle.load(fh)
+                    if not data:
+                        continue
+                    if isinstance(data, list) and len(data) > 3:
+                        all_data.extend(data)
+                    elif isinstance(data, (list, tuple)) and len(data) == 3:
+                        all_data.append(list(data))
+            except (pickle.UnpicklingError, EOFError):
+                continue
+        if not all_data:
+            return pd.DataFrame()
+        df = pd.DataFrame(all_data, columns=["m", "n", "ops"]).drop_duplicates().astype(float)
+        return df[df["ops"] > 0]
 
 
 def _batched(iterable, n):
@@ -294,11 +387,6 @@ def solve_and_cluster(x_data, y_data, feature_names, alpha, normalise: bool = Tr
     abs_std = np.abs(std_coefs)
     order = np.argsort(-abs_std)
 
-    log.info(f"Коефіцієнти (norm={normalise}, з урахуванням Bias):")
-    for rank, i in enumerate(order):
-        log.info("\t#%d %s: raw=%.4e, std_coef=%.4e, |std|=%.4e, std(x)=%.4e",
-                 rank + 1, feature_names[i], raw_coefs[i], std_coefs[i], abs_std[i], stds[i])
-
     sorted_abs = abs_std[order]
     sorted_names = [feature_names[i] for i in order]
 
@@ -400,6 +488,11 @@ def _plot_scatter_pred(ax, y_true, y_pred, title):
 
 
 def plot_models(df, m1_indices, best_indices, m1_coefs, full_coefs, m1_intercept, full_intercept):
+    if CHECK_VAR:
+        # TODO: Зробити PCA (C=2) та PCA (C=3) відповідно, PCA найкраще підходитьЮ бо лінійна регресія у нас.
+        log.info("Побудова 2D/3D графіків для абстрактних багатовимірних функцій (x1..xN) вимкнена.")
+        return
+
     m_vals = sorted(df["m"].unique())
     n_vals = sorted(df["n"].unique())
 
@@ -492,13 +585,13 @@ def plot_models(df, m1_indices, best_indices, m1_coefs, full_coefs, m1_intercept
 
     x_df, _ = build_feature_matrix(df)
     x_raw = x_df.values
-    y = df["ops"].values
+    y_plot = df["ops"].values
     pred_m1 = x_raw[:, m1_indices] @ m1_coefs + m1_intercept
     pred_full = x_raw[:, best_indices] @ full_coefs + full_intercept
 
     fig, axes = plt.subplots(1, 2, figsize=(20, 8), dpi=200)
-    _plot_scatter_pred(axes[0], y, pred_m1, "M1 + зсув (залишковий)")
-    _plot_scatter_pred(axes[1], y, pred_full, "M1 + M2 + зсув (надлишковий)")
+    _plot_scatter_pred(axes[0], y_plot, pred_m1, "M1 + зсув (залишковий)")
+    _plot_scatter_pred(axes[1], y_plot, pred_full, "M1 + M2 + зсув (надлишковий)")
     fig.tight_layout()
     fig.savefig(os.path.join(PLOTS_DIR, "порівняння_прогноз_vs_реальність.png"))
     plt.close(fig)
@@ -510,7 +603,8 @@ def _fit_with_intercept(x_full, y_full, ones, indices, alpha):
     x_sub = x_full[:, idx]
     x_aug = torch.cat([x_sub, ones], dim=1)
     xt_x = x_aug.T @ x_aug
-    xt_x.add_(torch.eye(x_aug.shape[1], device=DEVICE, dtype=DTYPE), alpha=alpha)
+    if alpha > 0:
+        xt_x.add_(torch.eye(x_aug.shape[1], device=DEVICE, dtype=DTYPE), alpha=alpha)
     xt_y = x_aug.T @ y_full
     w = _torch_solve_single(xt_x, xt_y)
     w_np = w.cpu().numpy().flatten()
@@ -522,6 +616,38 @@ def _fit_with_intercept(x_full, y_full, ones, indices, alpha):
     return coefs, intercept, sse
 
 
+def _split_into_two_classes(partial_results: list) -> Tuple[list, list]:
+    """Розбиття описів на 2 класи (M1 - погані, M2 - перспективні) за допомогою кластеризації SSE."""
+    sorted_res = sorted(partial_results, key=lambda x: x["sse"])
+    sse_list = np.array([x["sse"] for x in sorted_res])
+
+    try:
+        from sklearn.cluster import KMeans
+        kmeans = KMeans(n_clusters=2, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(sse_list.reshape(-1, 1))
+
+        centers = kmeans.cluster_centers_.flatten()
+        good_label = np.argmin(centers)
+
+        m2_class = [res for res, lbl in zip(sorted_res, labels) if lbl == good_label]
+        m1_class = [res for res, lbl in zip(sorted_res, labels) if lbl != good_label]
+
+    except Exception as e:
+        log.warning(f"K-Means кластеризація не вдалася ({e}), використовуємо розбиття по середньому.")
+        mean_sse = np.mean(sse_list)
+        m2_class = [x for x in sorted_res if x["sse"] <= mean_sse]
+        m1_class = [x for x in sorted_res if x["sse"] > mean_sse]
+
+    if not m2_class:
+        m2_class = sorted_res[:1]
+
+    return m2_class, m1_class
+
+
+def sort_features_numerically(features):
+    return sorted(features, key=lambda x: int(x[1:]))
+
+
 def run_gmdh(df: pd.DataFrame):
     t_start = time.perf_counter()
     log.info("Ініціалізація МГУА")
@@ -529,8 +655,13 @@ def run_gmdh(df: pd.DataFrame):
     x_df, feature_names = build_feature_matrix(df)
     x_raw = x_df.values
     y = df["ops"].values
+    y_raw = y.copy()
+
+    print(x_raw)
+    print(y_raw)
+
     n_features = len(feature_names)
-    alpha = .1
+    alpha = .0
 
     log.info("Матриця ознак: %d зразків x %d ознак", x_raw.shape[0], n_features)
     log.info("Ознаки: %s", ", ".join(feature_names))
@@ -556,10 +687,6 @@ def run_gmdh(df: pd.DataFrame):
     x_te2_t = torch.tensor(x_raw[idx_1].T, dtype=DTYPE, device=DEVICE)
     y_te2 = torch.tensor(y[idx_1], dtype=DTYPE, device=DEVICE)
 
-    del x1, y1, x2, y2
-    torch.cuda.empty_cache()
-    gc.collect()
-
     cached_m1 = load_cache_m1()
     if cached_m1 is not None:
         m1_names = cached_m1["m1_names"]
@@ -575,17 +702,9 @@ def run_gmdh(df: pd.DataFrame):
         log.info("Крок 2: стандартизована підгонка + кластеризація (половина 2)")
         raw_coefs_2, m1_2, m2_2 = solve_and_cluster(x_raw[idx_2], y[idx_2], feature_names, alpha)
 
-        log.info("Половина 1 -> M1_1: %s", m1_1)
-        log.info("Половина 1 -> M2_1: %s", m2_1)
-        log.info("Половина 2 -> M1_2: %s", m1_2)
-        log.info("Половина 2 -> M2_2: %s", m2_2)
-
         m1_names = sorted(set(m1_1) & set(m1_2))
         all_features = set(feature_names)
         m2_names = sorted(all_features - set(m1_names))
-
-        log.info("Результуючий M1 (перетин): %s", m1_names)
-        log.info("Результуючий M2 (решта): %s", m2_names)
 
         if not m1_names:
             log.warning("M1 порожній! Беремо ознаку з найбільшим середнім стандартизованим коефіцієнтом")
@@ -616,6 +735,67 @@ def run_gmdh(df: pd.DataFrame):
     log.info("M2 (%d ознак): %s", len(m2_indices_list), m2_names)
     log.info("SSE тільки M1: %.6e", sse_m1_only)
 
+    if IS_VARIANCE_FIX:
+        log.info("=" * 60)
+        log.info("УВІМКНЕНО IS_VARIANCE_FIX: Адаптований МГУА")
+
+        x_full = torch.tensor(x_raw, dtype=DTYPE, device=DEVICE)
+        y_full = torch.tensor(y_raw, dtype=DTYPE, device=DEVICE).unsqueeze(1)
+        ones = torch.ones(len(y_raw), 1, dtype=DTYPE, device=DEVICE)
+
+        # Знаходимо розрахункові значення y_hat по залишковому опису (M1).
+        m1_coefs, m1_intercept, _ = _fit_with_intercept(x_full, y_full, ones, m1_indices_list, alpha)
+
+        idx_tensor = torch.tensor(m1_indices_list, dtype=torch.long, device=DEVICE)
+        x_sub = x_full[:, idx_tensor]
+
+        y_hat = (x_sub @ torch.tensor(m1_coefs, dtype=DTYPE, device=DEVICE).unsqueeze(1)) + m1_intercept
+        y_hat = y_hat.squeeze().cpu().numpy()
+
+        y = y_hat
+
+        log.info(">>> Цільову змінну y_i замінено на розрахункову y_hat від залишкового опису (M1). <<<")
+        log.info(f"    Дисперсія оригінального y: {np.var(y_raw):.2f}")
+        log.info(f"    Дисперсія нового y_hat:    {np.var(y):.2f}")
+        log.info(
+            f"    Оцінка зменшення дисперсії: {(np.var(y_raw) / np.var(y)) if np.var(y) > 0 else float("inf"):.4f} разів")
+
+        log.info("=" * 60)
+
+        # 1 / n * sum (abs(y_i - theta^T x_i))
+        mean_abs_diff_data_ideal = np.mean(np.abs(y_raw - y_ideal_copy))
+        # 1 / n * sum (abs(theta_hat^T x_i - theta^T x_i))
+        mean_abs_diff_model_ideal = np.mean(np.abs(y_hat - y_ideal_copy))
+
+        noise_reduction = mean_abs_diff_data_ideal / mean_abs_diff_model_ideal if mean_abs_diff_model_ideal > 0 else float(
+            "inf")
+        log.info(
+            f"    Середнє відхилення експериментальних значень від значень моделі на вхідних експериментальних даних: {mean_abs_diff_data_ideal:.2f}")
+        log.info(
+            f"    Середнє відхилення значень оціненої та ідеальної регресії на вхідних експериментальних даних: {mean_abs_diff_model_ideal:.2f}")
+        log.info(f"    Оцінка зменшення шуму (відхилення від ідеалу): {noise_reduction:.4f} разів")
+
+        log.info("=" * 60)
+
+        # Оновлюємо тензори з новими цільовими значеннями
+        y1 = torch.tensor(y[idx_1], dtype=DTYPE, device=DEVICE).unsqueeze(1)
+        y2 = torch.tensor(y[idx_2], dtype=DTYPE, device=DEVICE).unsqueeze(1)
+
+        x1_t = torch.tensor(x_raw[idx_1], dtype=DTYPE, device=DEVICE)
+        x2_t = torch.tensor(x_raw[idx_2], dtype=DTYPE, device=DEVICE)
+
+        xt_y_1 = x1_t.T @ y1
+        xt_y_2 = x2_t.T @ y2
+
+        y_te1 = torch.tensor(y[idx_2], dtype=DTYPE, device=DEVICE)
+        y_te2 = torch.tensor(y[idx_1], dtype=DTYPE, device=DEVICE)
+
+        del x1_t, x2_t
+
+    del x1, y1, x2, y2
+    torch.cuda.empty_cache()
+    gc.collect()
+
     best_sse = sse_m1_only
     best_m2_combo = list()
     best_m2_combo_names = list()
@@ -624,6 +804,8 @@ def run_gmdh(df: pd.DataFrame):
 
     log.info("Загальна кількість комбінацій M2: %d", total_combos)
 
+    all_partial_results = []
+
     for k in range(1, n_m2 + 1):
         n_combs_k = math.comb(n_m2, k)
         log.info("k=%d з M2: %d комбінацій", k, n_combs_k)
@@ -631,11 +813,13 @@ def run_gmdh(df: pd.DataFrame):
         cached_k = load_cache_k(k)
         if cached_k is not None:
             log.info("k=%d: завантажено з кешу", k)
+            if IS_VARIANCE_FIX and "partial_results" in cached_k:
+                all_partial_results.extend(cached_k["partial_results"])
+
             if cached_k["best_sse"] < best_sse:
                 best_sse = cached_k["best_sse"]
                 best_m2_combo = cached_k["best_m2_combo"]
                 best_m2_combo_names = cached_k["best_m2_combo_names"]
-                log.info("k=%d: краще SSE з кешу = %.6e, M2: %s", k, best_sse, best_m2_combo_names)
             continue
 
         t_k = time.perf_counter()
@@ -644,6 +828,7 @@ def run_gmdh(df: pd.DataFrame):
         k_best_names = list()
         processed = 0
         batch_size = BATCH_SIZE
+        partial_results_k = []
 
         with tqdm(total=n_combs_k, desc=f"k={k}/{n_m2}", ncols=100) as pbar:
             while True:
@@ -665,6 +850,15 @@ def run_gmdh(df: pd.DataFrame):
                         sse2, _ = solve_lsm_batch(idx_tensor, xt_x_2, xt_y_2, x_te2_t, y_te2, alpha)
 
                         total_sse = sse1 + sse2
+
+                        if IS_VARIANCE_FIX:
+                            for i, s_val in enumerate(total_sse):
+                                partial_results_k.append({
+                                    "sse": float(s_val),
+                                    "combo": list(batch_cpu[i]),
+                                    "names": [m2_names[j] for j in batch_cpu[i]]
+                                })
+
                         min_idx = np.argmin(total_sse)
                         min_val = total_sse[min_idx]
 
@@ -703,28 +897,70 @@ def run_gmdh(df: pd.DataFrame):
         elapsed_k = time.perf_counter() - t_k
         log.info("k=%d завершено за %.2f с, найкраще SSE=%.6e", k, elapsed_k, k_best_sse)
 
-        save_cache_k(k, {
+        if IS_VARIANCE_FIX:
+            all_partial_results.extend(partial_results_k)
+
+        cache_data = {
             "k": k,
             "best_sse": k_best_sse,
             "best_m2_combo": k_best_combo,
             "best_m2_combo_names": k_best_names,
             "elapsed": elapsed_k,
             "n_combs": n_combs_k,
-        })
+        }
+        if IS_VARIANCE_FIX:
+            cache_data["partial_results"] = partial_results_k
+
+        save_cache_k(k, cache_data)
 
         torch.cuda.empty_cache()
         gc.collect()
 
     log.info("=" * 60)
-    log.info("Найкраще SSE (крос-валідація): %.6e", best_sse)
-    log.info("M1: %s", m1_names)
-    log.info("Найкращі з M2: %s", best_m2_combo_names)
+
+    if IS_VARIANCE_FIX:
+        # TODO: перейменувати ось тут на L1 та L2, бо М1 та М2 - це про кластеризацію коефіцієнтів, а не про класи описів.
+        log.info("Крок 5 & 6: Кластеризація описів на 2 класи (М1 та М2) та вибір найпростішої структури")
+        m2_class, m1_class = _split_into_two_classes(all_partial_results)
+
+        log.info(f"Всього згенеровано описів: {len(all_partial_results)}")
+        log.info(f"Клас М2 (перспективні, менше SSE): {len(m2_class)} описів")
+
+        top_len = 100
+
+        log.info(f"Найкращі {top_len} описів з класу М2 (відсортовані за довжиною та SSE):")
+        sorted_m2 = sorted(m2_class, key=lambda x: (len(x["combo"]), x["sse"]))
+
+        for res in sorted_m2[:top_len]:
+            combo_names = [m2_names[j] for j in res["combo"]]
+            sorted_features = sort_features_numerically(m1_names + combo_names)
+            log.info(f"  Комбінація: M1={m1_names} + M2={combo_names} ({sorted_features}), SSE: {res["sse"]:.6e}")
+
+        log.info(f"Клас М1 (погані, більше SSE): {len(m1_class)} описів")
+
+        # ПРАВИЛЬНА ЛОГІКА: Вибираємо найпростішу структуру (найкоротшу довжину) з класу М2 (перспективні).
+        # Якщо таких кілька — ту, що має найменший SSE серед них.
+        # best_model = min(m2_class, key=lambda x: (len(x["combo"]), x["sse"]))
+        best_model = sorted_m2[
+            0]  # Уже відсортовано за довжиною та SSE, тому перший елемент - найкращий за цими критеріями
+
+        best_m2_combo = best_model["combo"]
+        best_m2_combo_names = best_model["names"]
+        best_sse = best_model["sse"]
+
+        log.info(f"Обрана найпростіша структура з М2 (кількість членів M2: {len(best_m2_combo)}):")
+        log.info(f"-> Додаткові ознаки: {best_m2_combo_names}")
+        log.info(f"-> Критерій SSE (на y_hat): {best_sse:.6e}")
+    else:
+        log.info("Найкраще SSE (крос-валідація): %.6e", best_sse)
+        log.info("M1: %s", m1_names)
+        log.info("Найкращі з M2: %s", best_m2_combo_names)
 
     best_all_names = m1_names + best_m2_combo_names
     best_all_indices = m1_indices_list + [m2_indices_list[j] for j in best_m2_combo]
 
     log.info("=" * 60)
-    log.info("Фінальна підгонка на ВСІХ даних")
+    log.info("Крок 7: Фінальна підгонка на ВСІХ ОРИГІНАЛЬНИХ даних")
 
     cached_final = load_cache_final()
     if cached_final is not None and set(cached_final.get("best_all_names", list())) == set(best_all_names):
@@ -736,13 +972,14 @@ def run_gmdh(df: pd.DataFrame):
         log.info("Фінальний результат завантажено з кешу")
     else:
         x_full = torch.tensor(x_raw, dtype=DTYPE, device=DEVICE)
-        y_full = torch.tensor(y, dtype=DTYPE, device=DEVICE).unsqueeze(1)
-        ones = torch.ones(len(y), 1, dtype=DTYPE, device=DEVICE)
+        y_full_orig = torch.tensor(y_raw, dtype=DTYPE, device=DEVICE).unsqueeze(1)  # Обов`язково використовуємо y_raw
+        ones = torch.ones(len(y_raw), 1, dtype=DTYPE, device=DEVICE)
 
-        final_coefs, final_intercept, final_sse = _fit_with_intercept(x_full, y_full, ones, best_all_indices, alpha)
-        m1_coefs, m1_intercept, _ = _fit_with_intercept(x_full, y_full, ones, m1_indices_list, alpha)
+        final_coefs, final_intercept, final_sse = _fit_with_intercept(x_full, y_full_orig, ones, best_all_indices,
+                                                                      alpha)
+        m1_coefs, m1_intercept, _ = _fit_with_intercept(x_full, y_full_orig, ones, m1_indices_list, alpha)
 
-        del x_full, y_full, ones
+        del x_full, y_full_orig, ones
         torch.cuda.empty_cache()
 
         save_cache_final({
@@ -757,7 +994,7 @@ def run_gmdh(df: pd.DataFrame):
             "m1_indices": m1_indices_list,
         })
 
-    log.info("SSE на всіх даних: %.6e", final_sse)
+    log.info("SSE на всіх оригінальних даних: %.6e", final_sse)
 
     log.info("=" * 60)
     log.info("НАЙКРАЩА ФОРМУЛА:")
@@ -810,7 +1047,7 @@ def run_gmdh(df: pd.DataFrame):
     joblib.dump(model_bin, os.path.join(PLOTS_DIR, "фінальна_модель.bin"))
     log.info("Модель збережено у %s/фінальна_модель.bin", PLOTS_DIR)
 
-    log.info("Побудова графіків...")
+    log.info("Побудова графіків…")
     plot_models(
         df,
         m1_indices_list, best_all_indices,
@@ -822,7 +1059,7 @@ def run_gmdh(df: pd.DataFrame):
     t_total = time.perf_counter() - t_start
     log.info("Загальний час МГУА: %.3f с", t_total)
 
-    return best_all_names, final_coefs, final_intercept, final_sse
+    return best_all_names, final_coefs, final_intercept, final_sse, m1_names, best_m2_combo_names
 
 
 def main():
@@ -831,7 +1068,7 @@ def main():
 
     df = load_data()
     if df.empty:
-        log.error("Дані не знайдено у директорії '%s'", CACHE_DIR)
+        log.error("Дані не знайдено у директорії \"%s\"", CACHE_DIR)
         return
 
     log.info("Завантажено %d точок даних", len(df))
@@ -847,4 +1084,5 @@ def main():
 
 
 if __name__ == "__main__":
+    # TODO: Замінити всі виводи дробів на round(…, D) для кращої читабельності в логах, D - кількість знаків після коми
     main()
